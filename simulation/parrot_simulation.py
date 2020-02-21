@@ -167,9 +167,7 @@ class JobArrival(Event, file):
 
         btmap = None
         if not long_job:
-            #pdb.set_trace()
-            #print current_time, ": Short Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
-
+            print current_time, ": Short Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
             
             rnd_worker_in_big_partition = random.randint(self.simulation.index_first_worker_of_big_partition, len(self.simulation.workers)-1)
             self.simulation.hash_jobid_to_node[self.job.id]=rnd_worker_in_big_partition
@@ -182,8 +180,7 @@ class JobArrival(Event, file):
             worker_indices = self.simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, possible_worker_indices,MIN_NR_PROBES)
 
         else:
-            #pdb.set_trace()
-            #print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
+            print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
             btmap = self.simulation.cluster_status_keeper.get_btmap()
 
             if (SYSTEM_SIMULATED == "DLWL"):
@@ -304,7 +301,6 @@ class ClusterStatusKeeper():
         return self.btmap
 
     def update_workers_queue(self, worker_indices, increase, duration):
-        #pdb.set_trace()
         for worker in worker_indices:
             queue = self.worker_queues[worker]
             if increase:
@@ -366,7 +362,6 @@ class TaskEndEvent():
         if(self.job_type_for_scheduling == BIG):
             stats.STATS_TASKS_LONG_FINISHED += 1
 
-        #pdb.set_trace()
         del Job.per_job_task_info[self.job_id][self.this_task_id]
             
 
@@ -847,8 +842,6 @@ class Simulation(object):
 
     #Simulation class
     def find_workers_long_job_prio(self, num_tasks, estimated_task_duration, workers_queue_status, current_time, simulation, hash_workers_considered):
-
-        pdb.set_trace()
         chosen_worker_indices = []
         workers_needed = num_tasks
         prio_queue = Queue.PriorityQueue()
@@ -947,11 +940,11 @@ class Simulation(object):
 
     #Simulation class
     def send_probes(self, job, current_time, worker_indices, btmap):
-        #pdb.set_trace()
+
         if SYSTEM_SIMULATED == "Hawk" or SYSTEM_SIMULATED == "IdealEagle":
             return self.send_probes_hawk(job, current_time, worker_indices, btmap)
         if SYSTEM_SIMULATED == "Eagle":
-            #pdb.set_trace()
+
             return self.send_probes_eagle(job, current_time, worker_indices, btmap)
         if SYSTEM_SIMULATED == "CLWL":
             return self.send_probes_hawk(job, current_time, worker_indices, btmap)
@@ -1019,7 +1012,7 @@ class Simulation(object):
         self.jobs[job.id] = job
         probe_events = []
 
-        #pdb.set_trace()
+
         if (job.job_type_for_scheduling == BIG):
             for worker_index in worker_indices:
                 probe_events.append((current_time + NETWORK_DELAY, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
@@ -1031,21 +1024,6 @@ class Simulation(object):
             self.btmap = None
             ROUNDS_SCHEDULING = 2 
 
-            #use local bitmap
-            #self.btmap        = self.workers[self.hash_jobid_to_node[job.id]].btmap
-            #self.btmap_tstamp = self.workers[self.hash_jobid_to_node[job.id]].btmap_tstamp
-            #ROUNDS_SCHEDULING = 2
-            
-            #if(self.btmap != None):
-             #   list_non_long_job_workers = self.get_list_non_long_job_workers_from_btmap(self.btmap)
-              #  worker_indices = self.find_workers_random(1, missing_probes, list_non_long_job_workers, 0)
-            #else:
-             #   stats.STATS_RND_FIRST_ROUND_NO_LOCAL_BITMAP +=1 
-
-             #small
-            #worker_indices = self.find_workers_random(PROBE_RATIO,job.num_tasks,self.big_partition_workers,MIN_NR_PROBES)
-
- 
             stats.STATS_ROUNDS_ATTEMPTS +=1
             for i in range(0,ROUNDS_SCHEDULING):
                 ok_nr, ok_nodes = self.try_round_of_probing(current_time,job,worker_indices,probe_events,i+1)  
@@ -1109,12 +1087,12 @@ class Simulation(object):
         events = []
         task_duration = job.unscheduled_tasks.pop()
         task_completion_time = task_duration + get_task_response_time
-        #print current_time, " worker:", worker.id, " task from job ", job_id, " task duration: ", task_duration, " will finish at time ", task_completion_time
+        print current_time, " worker:", worker.id, " task from job ", job_id, " task duration: ", task_duration, " will finish at time ", task_completion_time
         is_job_complete = job.update_task_completion_details(task_completion_time)
 
         if is_job_complete:
             self.jobs_completed += 1;
-            #print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time)
+            print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time)
 
         events.append((task_completion_time, TaskEndEvent(worker, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, job.estimated_task_duration, this_task_id)))
         
@@ -1264,7 +1242,7 @@ print >> stats_file, "STATS_TASKS_SHORT_FINISHED:             ",          stats.
 print >> stats_file, "STATS_TASKS_LONG_FINISHED:             ",          stats.STATS_TASKS_LONG_FINISHED
 print >> stats_file, "STATS_JOBS_FINISHED:             ",          s.jobs_scheduled
 
-if(SYSTEM_SIMULATED=="Eagle"):
+if(SYSTEM_SIMULATED=="Eagle" and stats.STATS_TASKS_SHORT_FINISHED > 0):
     print >> stats_file, "%TASKS AFFECTED BY HOLB ",stats.STATS_SHORT_TASKS_WAITED_FOR_BIG*1.0/stats.STATS_TASKS_SHORT_FINISHED," %JOBS ",len(s.jobs_affected_by_holb)*1.0/s.jobs_scheduled
 
 stats_file.close()
