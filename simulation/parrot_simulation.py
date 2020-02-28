@@ -23,13 +23,11 @@
 import sys
 import time
 import logging
-import math
 import random
 import Queue
 import bitmap
 import copy
 import collections
-import pdb
 
 class TaskDurationDistributions:
     CONSTANT, MEAN, FROM_FILE  = range(3)
@@ -63,8 +61,8 @@ class Job(object):
         self.off_mean_bottom = off_mean_bottom
         self.off_mean_top = off_mean_top
 
-        self.job_type_for_scheduling = BIG if mean_task_duration > CUTOFF_THIS_EXP  else SMALL
-        self.job_type_for_comparison = BIG if mean_task_duration > CUTOFF_BIG_SMALL else SMALL
+        self.job_type_for_scheduling = BIG
+        self.job_type_for_comparison = BIG
         
 
         if   task_distribution == TaskDurationDistributions.FROM_FILE: 
@@ -115,7 +113,7 @@ class Job(object):
 class Stats(object):
 
     STATS_STEALING_MESSAGES = 0
-    STATS_SH_PROBES_QUEUED_BEHIND_BIG = 0
+    #STATS_SH_PROBES_QUEUED_BEHIND_BIG = 0
     STATS_TASKS_SH_EXEC_IN_BP = 0
     STATS_TOTAL_STOLEN_PROBES = 0
     STATS_TOTAL_STOLEN_B_FROM_B_PROBES = 0
@@ -162,46 +160,19 @@ class JobArrival(Event, file):
     def run(self, current_time):
         new_events = []
 
-        long_job = self.job.job_type_for_scheduling == BIG
         worker_indices = []
 
         btmap = None
-        if not long_job:
-            print current_time, ": Short Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
-            
-            rnd_worker_in_big_partition = random.randint(self.simulation.index_first_worker_of_big_partition, len(self.simulation.workers)-1)
-            self.simulation.hash_jobid_to_node[self.job.id]=rnd_worker_in_big_partition
+        print(current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration)
+        btmap = self.simulation.cluster_status_keeper.get_btmap()
 
-            if SYSTEM_SIMULATED == "Hawk" or SYSTEM_SIMULATED == "Eagle":
-                possible_worker_indices = self.simulation.small_partition_workers
-            if SYSTEM_SIMULATED == "IdealEagle":
-                possible_worker_indices = self.simulation.get_list_non_long_job_workers_from_btmap(self.simulation.cluster_status_keeper.get_btmap())
-
-            worker_indices = self.simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, possible_worker_indices,MIN_NR_PROBES)
-
+        workers_queue_status = self.simulation.cluster_status_keeper.get_queue_status()
+        if SYSTEM_SIMULATED == "CLWL" and self.job.job_type_for_comparison == SMALL:
+            possible_workers = self.simulation.small_partition_workers_hash
         else:
-            print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
-            btmap = self.simulation.cluster_status_keeper.get_btmap()
-
-            if (SYSTEM_SIMULATED == "DLWL"):
-                if self.job.job_type_for_comparison == SMALL:
-                    possible_workers = self.simulation.small_partition_workers_hash
-                else:
-                    possible_workers = self.simulation.big_partition_workers_hash
-                estimated_task_durations = [self.job.estimated_task_duration for i in range(len(self.job.unscheduled_tasks))]
-                worker_indices = self.simulation.find_workers_dlwl(estimated_task_durations, self.simulation.shared_cluster_status, current_time, self.simulation, possible_workers)
-                self.simulation.cluster_status_keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration)
-            elif (self.simulation.SCHEDULE_BIG_CENTRALIZED):
-                workers_queue_status = self.simulation.cluster_status_keeper.get_queue_status()
-                if SYSTEM_SIMULATED == "CLWL" and self.job.job_type_for_comparison == SMALL:
-                    possible_workers = self.simulation.small_partition_workers_hash
-                else:
-                    possible_workers = self.simulation.big_partition_workers_hash
-
-                worker_indices = self.simulation.find_workers_long_job_prio(self.job.num_tasks, self.job.estimated_task_duration, workers_queue_status, current_time, self.simulation, possible_workers)
-                self.simulation.cluster_status_keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration)
-            else:
-                worker_indices = self.simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, self.simulation.big_partition_workers,MIN_NR_PROBES)
+            possible_workers = self.simulation.big_partition_workers_hash
+        worker_indices = self.simulation.find_workers_long_job_prio(self.job.num_tasks, self.job.estimated_task_duration, workers_queue_status, current_time, self.simulation, possible_workers)
+        self.simulation.cluster_status_keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration)
 
         Job.per_job_task_info[self.job.id] = {}
         for tasknr in range(0,self.job.num_tasks):
@@ -245,30 +216,6 @@ class PeriodicTimerEvent(Event):
             new_events.append((current_time + MONITOR_INTERVAL,self))
         return new_events
 
-
-#####################################################################################################################
-#####################################################################################################################
-#####################################################################################################################
-
-class WorkerHeartbeatEvent(Event):
-    
-    def __init__(self,simulation):
-        self.simulation = simulation
-
-    def run(self, current_time):
-        new_events = []
-        if(HEARTBEAT_DELAY == 0):
-            self.simulation.shared_cluster_status = self.simulation.cluster_status_keeper.get_queue_status()
-        else:
-            self.simulation.shared_cluster_status = copy.deepcopy(self.simulation.cluster_status_keeper.get_queue_status()) 
-     
-        if(HEARTBEAT_DELAY != 0): 
-            if(self.simulation.jobs_completed != self.simulation.jobs_scheduled or self.simulation.scheduled_last_job == False):
-                new_events.append((current_time + HEARTBEAT_DELAY,self))
-
-        return new_events
-
-
 #####################################################################################################################
 #####################################################################################################################
 
@@ -281,7 +228,7 @@ class ProbeEvent(Event):
         self.btmap = btmap
 
     def run(self, current_time):
-        return self.worker.add_probe(self.job_id, self.task_length, self.job_type_for_scheduling, current_time,self.btmap, False)
+        return self.worker.add_probe(self.job_id, self.task_length, self.job_type_for_scheduling, current_time,self.btmap)
 
 #####################################################################################################################
 #####################################################################################################################
@@ -351,19 +298,13 @@ class TaskEndEvent():
     def run(self, current_time):
         global stats
         stats.STATS_TASKS_TOTAL_FINISHED += 1
-        if(self.job_type_for_scheduling != BIG):
-            stats.STATS_TASKS_SHORT_FINISHED += 1
-            if(self.worker.in_big):
-                stats.STATS_TASKS_SH_EXEC_IN_BP += 1
 
-        elif (self.SCHEDULE_BIG_CENTRALIZED):
+        if (self.SCHEDULE_BIG_CENTRALIZED):
             self.status_keeper.update_workers_queue([self.worker.id], False, self.estimated_task_duration)
 
-        if(self.job_type_for_scheduling == BIG):
-            stats.STATS_TASKS_LONG_FINISHED += 1
+        stats.STATS_TASKS_LONG_FINISHED += 1
 
         del Job.per_job_task_info[self.job_id][self.this_task_id]
-            
 
         self.worker.tstamp_start_crt_big_task =- 1
         return self.worker.free_slot(current_time)
@@ -399,26 +340,16 @@ class Worker(object):
         if (id < index_first_big):         self.in_small_not_big = True
 
         self.btmap = None
-        self.btmap_tstamp = -1
 
 
     #Worker class
-    def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap, handle_stealing):
+    def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap):
         global stats
 
-        long_job = job_type_for_scheduling == BIG
-        if (not long_job and handle_stealing == False and (self.executing_big == True or self.queued_big > 0)):
-            stats.STATS_SH_PROBES_QUEUED_BEHIND_BIG += 1        
-    
-        if (not long_job and handle_stealing == False and  self.in_big):        
-            stats.STATS_SH_PROBES_ASSIGNED_IN_BP +=1
+        self.queued_probes.append([job_id,task_length,(self.executing_big == True or self.queued_big > 0)])
 
-        self.queued_probes.append([job_id,task_length,(self.executing_big == True or self.queued_big > 0), 0, False,-1])
-
-        if (long_job):
-            self.queued_big     = self.queued_big + 1
-            self.btmap          = copy.deepcopy(btmap)
-            self.btmap_tstamp   = current_time
+        self.queued_big     = self.queued_big + 1
+        self.btmap          = copy.deepcopy(btmap)
 
         if len(self.queued_probes) > 0 and len(self.free_slots) > 0:
             return self.process_next_probe_in_the_queue(current_time)
@@ -457,7 +388,7 @@ class Worker(object):
             ctr_it += 1
 
         if(from_worker!=-1 and len(new_probes)!= 0):
-            print current_time, ": Worker ", self.id," Stealing: ", len(new_probes), " from: ",from_worker, " attempts: ",ctr_it
+            print(current_time, ": Worker ", self.id," Stealing: ", len(new_probes), " from: ",from_worker, " attempts: ",ctr_it)
             from_worker_obj=self.simulation.workers[from_worker]
             if(from_worker_obj.in_big and self.in_big):
                 stats.STATS_TOTAL_STOLEN_B_FROM_B_PROBES          += len(new_probes)
@@ -471,12 +402,12 @@ class Worker(object):
             stats.STATS_TOTAL_STOLEN_PROBES          += len(new_probes)
             stats.STATS_SUCCESSFUL_STEAL_ATTEMPTS   += 1
         else:
-            print current_time, ": Worker ", self.id," failed to steal. attempts: ",ctr_it
+            print(current_time, ": Worker ", self.id," failed to steal. attempts: ",ctr_it)
             stats.STATS_STEALING_MESSAGES += ctr_it
 
-        for job_id, task_length, behind_big, cum, sticky, handle_steal in new_probes:
+        for job_id, task_length in new_probes:
             assert (self.simulation.jobs[job_id].job_type_for_comparison != BIG)
-            new_events.extend(self.add_probe(job_id, task_length, SMALL, current_time, None,True))
+            new_events.extend(self.add_probe(job_id, task_length, SMALL, current_time, None))
 
         return new_events
 
@@ -595,7 +526,7 @@ class Worker(object):
 
         if(SBP_ENABLED==True and was_successful and not job_bydef_big):
             if(self.queued_probes[pos][4]):
-            	stats.STATS_STICKY_EXECUTIONS += 1
+                stats.STATS_STICKY_EXECUTIONS += 1
                 if(self.in_big):
                     stats.STATS_STICKY_EXECUTIONS_IN_BP +=1
             self.queued_probes[pos][4] = True
@@ -628,19 +559,6 @@ class Worker(object):
 
 
         return events
-
-
-    #Worker class
-    def get_remaining_exec_time_for_job_alt(self, job_id, current_time):
-        remaining_exec_time = 0
-        job_info_hash       = Job.per_job_task_info[job_id]
-        for task in job_info_hash:
-            val = job_info_hash[task]
-            if( val == -1 ):  #task not started yet
-                remaining_exec_time +=  self.simulation.jobs[job_id].estimated_task_duration
-            #else:             #task started but not finished
-                #remaining_exec_time +=  self.simulation.jobs[job_id].estimated_task_duration - (current_time - val)
-        return remaining_exec_time
 
     #Worker class
     def get_remaining_exec_time_for_job_dist(self, job_id, current_time):
@@ -771,8 +689,8 @@ class Simulation(object):
         self.ESTIMATION = ESTIMATION
         self.shared_cluster_status = {}
 
-        print "self.index_last_worker_of_small_partition:         ", self.index_last_worker_of_small_partition
-        print "self.index_first_worker_of_big_partition:          ", self.index_first_worker_of_big_partition
+        print("self.index_last_worker_of_small_partition:         ", self.index_last_worker_of_small_partition)
+        print("self.index_first_worker_of_big_partition:          ", self.index_first_worker_of_big_partition)
 
         self.small_partition_workers_hash =  {}
         self.big_partition_workers_hash = {}
@@ -790,9 +708,9 @@ class Simulation(object):
         for node in self.small_not_big_partition_workers:
             self.small_not_big_partition_workers_hash[node] = 1
 
-        print "Size of self.small_partition_workers_hash:         ", len(self.small_partition_workers_hash)
-        print "Size of self.big_partition_workers_hash:           ", len(self.big_partition_workers_hash)
-        print "Size of self.small_not_big_partition_workers_hash: ", len(self.small_not_big_partition_workers_hash)
+        #print "Size of self.small_partition_workers_hash:         ", len(self.small_partition_workers_hash)
+        #print "Size of self.big_partition_workers_hash:           ", len(self.big_partition_workers_hash)
+        #print "Size of self.small_not_big_partition_workers_hash: ", len(self.small_not_big_partition_workers_hash)
 
 
         self.free_slots_small_partition = len(self.small_partition_workers)
@@ -800,44 +718,18 @@ class Simulation(object):
         self.free_slots_small_not_big_partition = len(self.small_not_big_partition_workers)
  
         self.jobs_scheduled = 0
-        self.jobs_completed = 0
+        #self.jobs_completed = 0
         self.scheduled_last_job = False
 
         self.cluster_status_keeper = ClusterStatusKeeper()
         self.stealing_allowed = stealing_allowed
         self.SCHEDULE_BIG_CENTRALIZED = SCHEDULE_BIG_CENTRALIZED
         self.WORKLOAD_FILE = WORKLOAD_FILE
-        self.btmap_tstamp = -1
         self.clusterstatus_from_btmap = None
 
         self.hash_jobid_to_node = {}
         self.btmap = None
-        self.jobs_affected_by_holb={}  
-
-    #Simulation class
-    def subtract_sets(self, set1, set2):
-        used = {}
-        difference = []
-        ctr_long = 0
-
-        for item in set2:
-            used[item] = 1
-
-        for worker in set1:
-            if not worker in set2:
-                difference.append(worker)
-
-        return difference
-
-
-    #Simulation class
-    def find_workers_random(self, probe_ratio, nr_tasks, possible_worker_indices, min_probes):
-        chosen_worker_indices = []
-        nr_probes = max(probe_ratio*nr_tasks,min_probes)
-        for it in range(0,nr_probes):
-            rnd_index = random.randint(0,len(possible_worker_indices)-1)
-            chosen_worker_indices.append(possible_worker_indices[rnd_index])
-        return chosen_worker_indices
+        self.jobs_affected_by_holb={}
 
 
     #Simulation class
@@ -893,163 +785,19 @@ class Simulation(object):
         return chosen_worker_indices
 
     #Simulation class
-    def find_workers_dlwl(self, estimated_task_durations, workers_queue_status, current_time,simulation, hash_workers_considered):
-
-        chosen_worker_indices = []
-        workers_needed = len(estimated_task_durations)
-        prio_queue = Queue.PriorityQueue()
-
-        for index in hash_workers_considered:
-            qlen          = workers_queue_status[index]                
-            worker_obj    = simulation.workers[index]
-
-            adjusted_waiting_time = qlen
-            start_of_crt_big_task = worker_obj.tstamp_start_crt_big_task # PAMELA: it will always be considered big for DLWL
-            assert(current_time >= start_of_crt_big_task)
-
-            if(start_of_crt_big_task != -1):
-                executed_so_far = current_time - start_of_crt_big_task
-                estimated_crt_task = worker_obj.estruntime_crt_task
-                adjusted_waiting_time = max(2*NETWORK_DELAY + qlen - min(executed_so_far,estimated_crt_task),0)
-
-            rand_dlwl = random.randint(0, HEARTBEAT_DELAY)
-            adjusted_waiting_time += rand_dlwl
-            prio_queue.put((adjusted_waiting_time,index))
-
-        # For now all estimated task duration are the same , optimize performance
-        #copy_estimated_task_durations = list(estimated_task_durations)
-
-        queue_length,worker = prio_queue.get()
-        while (workers_needed > len(chosen_worker_indices)):
-
-            next_queue_length,next_worker = prio_queue.get()
-            assert queue_length >= 0
-            assert next_queue_length >= 0
-
-            while(queue_length <= next_queue_length and len(chosen_worker_indices) < workers_needed):
-                chosen_worker_indices.append(worker)
-                queue_length += estimated_task_durations[0] #copy_estimated_task_durations.pop(0)
-
-            prio_queue.put((queue_length,worker))
-            queue_length = next_queue_length
-            worker = next_worker 
-
-        assert workers_needed == len(chosen_worker_indices)
-        return chosen_worker_indices
-
-
-    #Simulation class
     def send_probes(self, job, current_time, worker_indices, btmap):
-
-        if SYSTEM_SIMULATED == "Hawk" or SYSTEM_SIMULATED == "IdealEagle":
-            return self.send_probes_hawk(job, current_time, worker_indices, btmap)
         if SYSTEM_SIMULATED == "Eagle":
-
             return self.send_probes_eagle(job, current_time, worker_indices, btmap)
-        if SYSTEM_SIMULATED == "CLWL":
-            return self.send_probes_hawk(job, current_time, worker_indices, btmap)
-        if SYSTEM_SIMULATED == "DLWL":
-            return self.send_probes_hawk(job, current_time, worker_indices, btmap)
 
-
-    #Simulation class
-    def send_probes_hawk(self, job, current_time, worker_indices, btmap):
-        self.jobs[job.id] = job
-
-        probe_events = []
-        for worker_index in worker_indices:
-            probe_events.append((current_time + NETWORK_DELAY, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
-            job.probed_workers.add(worker_index)
-        return probe_events
-
-
-    #Simulation class
-    def try_round_of_probing(self, current_time, job, worker_list, probe_events, roundnr):
-        successful_worker_indices = []
-        id_worker_with_newest_btmap = -1
-        freshest_btmap_tstamp = self.btmap_tstamp
-
-        for worker_index in worker_list:
-            if(not self.workers[worker_index].executing_big and not self.workers[worker_index].queued_big):
-                probe_events.append((current_time + NETWORK_DELAY*(roundnr/2+1), ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, None)))
-                job.probed_workers.add(worker_index)
-                successful_worker_indices.append(worker_index)
-            if (self.workers[worker_index].btmap_tstamp > freshest_btmap_tstamp):
-                id_worker_with_newest_btmap = worker_index
-                freshest_btmap_tstamp       = self.workers[worker_index].btmap_tstamp
-
-        if (id_worker_with_newest_btmap != -1):                    
-            self.btmap = copy.deepcopy(self.workers[id_worker_with_newest_btmap].btmap)
-            self.btmap_tstamp = self.workers[id_worker_with_newest_btmap].btmap_tstamp
-
-        missing_probes = len(worker_list)-len(successful_worker_indices)
-        return len(successful_worker_indices), successful_worker_indices
-        
-
-    #Simulation class
-    def get_list_non_long_job_workers_from_btmap(self,btmap):
-        non_long_job_workers = []
-            
-        non_long_job_workers = self.small_not_big_partition_workers[:]
-
-        for index in self.big_partition_workers:
-            if not btmap.test(index):
-                non_long_job_workers.append(index)
-        return non_long_job_workers
-
-
-    def get_list_non_long_job_workers_from_bp_from_btmap(self,btmap):
-        non_long_job_workers = []
-            
-        for index in self.big_partition_workers:
-            if not btmap.test(index):
-                non_long_job_workers.append(index)
-        return non_long_job_workers
 
     #Simulation class
     def send_probes_eagle(self, job, current_time, worker_indices, btmap):
         global stats
         self.jobs[job.id] = job
         probe_events = []
-
-
-        if (job.job_type_for_scheduling == BIG):
-            for worker_index in worker_indices:
-                probe_events.append((current_time + NETWORK_DELAY, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
-                job.probed_workers.add(worker_index)
-
-        else:
-            missing_probes = len(worker_indices)
-            self.btmap_tstamp = -1
-            self.btmap = None
-            ROUNDS_SCHEDULING = 2 
-
-            stats.STATS_ROUNDS_ATTEMPTS +=1
-            for i in range(0,ROUNDS_SCHEDULING):
-                ok_nr, ok_nodes = self.try_round_of_probing(current_time,job,worker_indices,probe_events,i+1)  
-                if(i==0):
-                    stats.STATS_PERC_1ST_ROUNDS+=ok_nr*1.0/missing_probes
-                missing_probes -= ok_nr
-                stats.STATS_ROUNDS +=1
-                
-
-                if(missing_probes == 0):
-                    return probe_events
- 
-                assert(missing_probes >= 0)               
- 
-                list_non_long_job_workers = self.get_list_non_long_job_workers_from_btmap(self.btmap)
-                #smallupdate_task_completion_details
-                #list_non_long_job_workers = self.get_list_non_long_job_workers_from_bp_from_btmap(self.btmap)
-                #if(len(list_non_long_job_workers)==0):
-                 #   break
-                worker_indices = self.find_workers_random(1, missing_probes, list_non_long_job_workers,0)
-                stats.STATS_REASSIGNED_PROBES += missing_probes
-
-            if(missing_probes > 0):
-                worker_indices = self.find_workers_random(1, missing_probes, self.small_not_big_partition_workers,0)
-                self.try_round_of_probing(current_time,job,worker_indices,probe_events,ROUNDS_SCHEDULING+1)  
-                stats.STATS_FALLBACKS_TO_SP +=1
+        for worker_index in worker_indices:
+            probe_events.append((current_time + NETWORK_DELAY, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+            job.probed_workers.add(worker_index)
         
         return probe_events
 
@@ -1087,11 +835,11 @@ class Simulation(object):
         events = []
         task_duration = job.unscheduled_tasks.pop()
         task_completion_time = task_duration + get_task_response_time
-        print current_time, " worker:", worker.id, " task from job ", job_id, " task duration: ", task_duration, " will finish at time ", task_completion_time
+        print(current_time, " worker:", worker.id, " task from job ", job_id, " task duration: ", task_duration, " will finish at time ", task_completion_time)
         is_job_complete = job.update_task_completion_details(task_completion_time)
 
         if is_job_complete:
-            self.jobs_completed += 1;
+            #self.jobs_completed += 1;
             print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time)
 
         events.append((task_completion_time, TaskEndEvent(worker, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, job.estimated_task_duration, this_task_id)))
@@ -1108,7 +856,7 @@ class Simulation(object):
     def get_probes(self, current_time, free_worker_id):
         worker_index = random.randint(self.index_first_worker_of_big_partition, len(self.workers)-1)
         if     (STEALING_STRATEGY ==  "ATC"):       probes = self.workers[worker_index].get_probes_atc(current_time, free_worker_id)
-        elif (STEALING_STRATEGY == "RANDOM"):       probes = self.workers[worker_index].get_probes_random(current_time, free_worker_id)
+        #elif (STEALING_STRATEGY == "RANDOM"):       probes = self.workers[worker_index].get_probes_random(current_time, free_worker_id)
 
         return worker_index,probes
 
@@ -1134,10 +882,6 @@ class Simulation(object):
             assert(self.off_mean_top > 0)
             assert(self.off_mean_top>self.off_mean_bottom)
 
-        if(SYSTEM_SIMULATED == "DLWL"):
-            self.shared_cluster_status = self.cluster_status_keeper.get_queue_status()
-            self.event_queue.put((0, WorkerHeartbeatEvent(self)))
-
         line = self.jobs_file.readline()
         new_job = Job(self.task_distribution, line, estimate_distribution, self.off_mean_bottom, self.off_mean_top)
         self.event_queue.put((float(line.split()[0]), JobArrival(self, self.task_distribution, new_job, self.jobs_file)))
@@ -1152,7 +896,7 @@ class Simulation(object):
             for new_event in new_events:
                 self.event_queue.put(new_event)
 
-        print "Simulation ending, no more events"
+        print("Simulation ending, no more events")
         self.jobs_file.close()
 
 #####################################################################################################################
@@ -1170,7 +914,7 @@ job_start_tstamps = {}
 
 random.seed(123456798)
 if(len(sys.argv) != 23):
-    print "Incorrent number of parameters."
+    #print "Incorrent number of parameters."
     sys.exit(1)
 
 
@@ -1206,14 +950,14 @@ stats = Stats()
 s = Simulation(MONITOR_INTERVAL, stealing, SCHEDULE_BIG_CENTRALIZED, WORKLOAD_FILE,CUTOFF_THIS_EXP,CUTOFF_BIG_SMALL,ESTIMATION,OFF_MEAN_BOTTOM,OFF_MEAN_TOP,TOTAL_WORKERS)
 s.run()
 
-print "Simulation ended in ", (time.time() - t1), " s "
+print("Simulation ended in ", (time.time() - t1), " s ")
 
 finished_file.close()
 load_file.close()
 
 
 print >> stats_file, "STATS_SH_PROBES_ASSIGNED_IN_BP:      ",    stats.STATS_SH_PROBES_ASSIGNED_IN_BP
-print >> stats_file, "STATS_SH_PROBES_QUEUED_BEHIND_BIG:      ",    stats.STATS_SH_PROBES_QUEUED_BEHIND_BIG 
+#print >> stats_file, "STATS_SH_PROBES_QUEUED_BEHIND_BIG:      ",    stats.STATS_SH_PROBES_QUEUED_BEHIND_BIG
 print >> stats_file, "STATS_TASKS_SH_EXEC_IN_BP:             ",     stats.STATS_TASKS_SH_EXEC_IN_BP
 print >> stats_file, "STATS_SHORT_TASKS_WAITED_FOR_BIG:         ",           stats.STATS_SHORT_TASKS_WAITED_FOR_BIG
 print >> stats_file, "STATS_SHORT_JOBS_HAVING_TASKS_THAT_WAITED_FOR_BIG:         ",           len(s.jobs_affected_by_holb)
@@ -1244,5 +988,4 @@ print >> stats_file, "STATS_JOBS_FINISHED:             ",          s.jobs_schedu
 
 if(SYSTEM_SIMULATED=="Eagle" and stats.STATS_TASKS_SHORT_FINISHED > 0):
     print >> stats_file, "%TASKS AFFECTED BY HOLB ",stats.STATS_SHORT_TASKS_WAITED_FOR_BIG*1.0/stats.STATS_TASKS_SHORT_FINISHED," %JOBS ",len(s.jobs_affected_by_holb)*1.0/s.jobs_scheduled
-
 stats_file.close()
