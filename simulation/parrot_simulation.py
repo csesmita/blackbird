@@ -156,15 +156,9 @@ class PeriodicTimerEvent(Event):
 
     def run(self, current_time):
         new_events = []
-
         total_load       = str(int(10000*(1-self.simulation.total_free_slots*1.0/(TOTAL_WORKERS*SLOTS_PER_WORKER)))/100.0)
-        small_load       = str(int(10000*(1-self.simulation.free_slots_small_partition*1.0/len(self.simulation.small_partition_workers)))/100.0)
         big_load         = str(int(10000*(1-self.simulation.free_slots_big_partition*1.0/len(self.simulation.big_partition_workers)))/100.0)
-        small_not_big_load ="N/A"
-        if(len(self.simulation.small_not_big_partition_workers)!=0):
-            small_not_big_load        = str(int(10000*(1-self.simulation.free_slots_small_not_big_partition*1.0/len(self.simulation.small_not_big_partition_workers)))/100.0)
-
-        print >> load_file,"total_load: " + total_load + " small_load: " + small_load + " big_load: " + big_load + " small_not_big_load: " + small_not_big_load+" current_time: " + str(current_time) 
+        print >> load_file,"total_load: " + total_load + " small_load: " + small_load + " big_load: " + big_load + " current_time: " + str(current_time)
 
         if(not self.simulation.event_queue.empty()):
             new_events.append((current_time + MONITOR_INTERVAL,self))
@@ -240,11 +234,7 @@ class TaskEndEvent():
         global stats
         stats.STATS_TASKS_TOTAL_FINISHED += 1
         self.status_keeper.update_workers_queue([self.worker.id], False, self.estimated_task_duration)
-
-        stats.STATS_TASKS_LONG_FINISHED += 1
-
         del Job.per_job_task_info[self.job_id][self.this_task_id]
-
         self.worker.tstamp_start_crt_big_task =- 1
         return self.worker.free_slot(current_time)
 
@@ -254,9 +244,7 @@ class TaskEndEvent():
 
 class Worker(object):
     def __init__(self, simulation, num_slots, id, index_first_big):
-        
         self.simulation = simulation
-
         # List of times when slots were freed, for each free slot (used to track the time the worker spends idle).
         self.free_slots = []
         while len(self.free_slots) < num_slots:
@@ -266,22 +254,16 @@ class Worker(object):
         self.queued_probes = []
         self.id = id
         self.executing_big = False
-
         self.tstamp_start_crt_big_task = -1
         self.estruntime_crt_task = -1
-
         assert(id >= index_first_big)
         self.in_big = True
-
         self.btmap = None
-
 
     #Worker class
     def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap):
         global stats
-
         self.queued_probes.append([job_id,task_length,(self.executing_big == True or self.queued_big > 0)])
-
         self.queued_big     = self.queued_big + 1
         self.btmap          = copy.deepcopy(btmap)
 
@@ -289,8 +271,6 @@ class Worker(object):
             return self.process_next_probe_in_the_queue(current_time)
         else:
             return []
-
-
 
     #Worker class
     def free_slot(self, current_time):
@@ -303,17 +283,12 @@ class Worker(object):
         
         return []
 
-
-
     #Worker class
     def process_next_probe_in_the_queue(self, current_time):
         global stats
-
         self.free_slots.pop(0)
         self.simulation.decrease_free_slots_for_load_tracking(self)
-
         pos = 0
-
         job_id = self.queued_probes[pos][0]
         estimated_task_duration = self.queued_probes[pos][1]
 
@@ -359,9 +334,7 @@ class Simulation(object):
 
         print("Size of self.big_partition_workers_hash:           ", len(self.big_partition_workers_hash))
 
-        self.free_slots_small_partition = 0
         self.free_slots_big_partition = len(self.big_partition_workers)
-        self.free_slots_small_not_big_partition = 0
         self.jobs_scheduled = 0
         self.cluster_status_keeper = ClusterStatusKeeper()
         self.WORKLOAD_FILE = WORKLOAD_FILE
@@ -404,7 +377,6 @@ class Simulation(object):
             for nodeid in chosen_worker_indices:
                 prio_queue.put((estimated_task_duration,nodeid))
 
-        
         queue_length,worker = prio_queue.get()
         while (workers_needed > len(chosen_worker_indices)):
             next_queue_length,next_worker = prio_queue.get()
@@ -423,7 +395,6 @@ class Simulation(object):
     def send_probes(self, job, current_time, worker_indices, btmap):
         return self.send_probes_eagle(job, current_time, worker_indices, btmap)
 
-
     #Simulation class
     def send_probes_eagle(self, job, current_time, worker_indices, btmap):
         global stats
@@ -434,8 +405,6 @@ class Simulation(object):
             job.probed_workers.add(worker_index)
         
         return probe_events
-
-
 
     #Simulation class
     #bookkeeping for tracking the load
