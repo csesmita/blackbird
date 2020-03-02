@@ -28,6 +28,7 @@ import Queue
 import bitmap
 import copy
 import collections
+import pdb
 
 class TaskDurationDistributions:
     CONSTANT, MEAN, FROM_FILE  = range(3)
@@ -158,7 +159,7 @@ class PeriodicTimerEvent(Event):
         new_events = []
         total_load       = str(int(10000*(1-self.simulation.total_free_slots*1.0/(TOTAL_WORKERS*SLOTS_PER_WORKER)))/100.0)
         big_load         = str(int(10000*(1-self.simulation.free_slots_big_partition*1.0/len(self.simulation.big_partition_workers)))/100.0)
-        print >> load_file,"total_load: " + total_load + " small_load: " + small_load + " big_load: " + big_load + " current_time: " + str(current_time)
+        print >> load_file,"total_load: " + total_load + " big_load: " + big_load + " current_time: " + str(current_time)
 
         if(not self.simulation.event_queue.empty()):
             new_events.append((current_time + MONITOR_INTERVAL,self))
@@ -400,6 +401,7 @@ class Simulation(object):
         global stats
         self.jobs[job.id] = job
         probe_events = []
+        pdb.set_trace()
         for worker_index in worker_indices:
             probe_events.append((current_time + NETWORK_DELAY, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
             job.probed_workers.add(worker_index)
@@ -418,7 +420,7 @@ class Simulation(object):
     #bookkeeping for tracking the load
     def decrease_free_slots_for_load_tracking(self, worker):
         self.total_free_slots -= 1
-        asser(worker.in_big)
+        assert(worker.in_big)
         self.free_slots_big_partition -= 1
 
 
