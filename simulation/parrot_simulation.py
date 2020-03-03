@@ -96,7 +96,6 @@ class Job(object):
 #####################################################################################################################
 class Stats(object):
     STATS_TASKS_TOTAL_FINISHED = 0
-    STATS_TASKS_LONG_FINISHED = 0   
 
 #####################################################################################################################
 #####################################################################################################################
@@ -122,9 +121,12 @@ class JobArrival(Event, file):
     def run(self, current_time):
         print(current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration)
         btmap = self.simulation.cluster_status_keeper.get_btmap()
-
+        pdb.set_trace()
+        # Get queues of all workers in the system
         workers_queue_status = self.simulation.cluster_status_keeper.get_queue_status()
+        # possible workers = all workers in the system
         possible_workers = self.simulation.big_partition_workers_hash
+
         worker_indices = self.simulation.find_workers_long_job_prio(self.job.num_tasks, self.job.estimated_task_duration, workers_queue_status, current_time, self.simulation, possible_workers)
         self.simulation.cluster_status_keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration)
 
@@ -147,7 +149,8 @@ class JobArrival(Event, file):
 
 #####################################################################################################################
 #####################################################################################################################
-
+# Print Load Statistics once in 5 seconds
+# Generate more timer events if there are events already sitting in the event queue
 class PeriodicTimerEvent(Event):
     def __init__(self,simulation):
         self.simulation = simulation
@@ -336,16 +339,20 @@ class Simulation(object):
         prio_queue = Queue.PriorityQueue()
 
         empty_nodes = []  #performance optimization
+        # For Parrot, index is all of the workers
         for index in hash_workers_considered:
+            # qlen denotes the current outstanding duration of the queue at this worker
             qlen          = workers_queue_status[index]                
             worker_obj    = simulation.workers[index]
             worker_id     = index
 
+            # currently the worker is doing nothing
             if qlen == 0 :
                 empty_nodes.append(worker_id)
                 if(len(empty_nodes) == workers_needed):
                     break
-            else: 
+            else:
+                # this index/worker is doing something! Add to prio queue on the estimated wait time for this worker
                 start_of_crt_big_task = worker_obj.tstamp_start_crt_big_task
                 assert(current_time >= start_of_crt_big_task)
                 adjusted_waiting_time = qlen
@@ -361,11 +368,12 @@ class Simulation(object):
         #performance optimization 
         if(len(empty_nodes) == workers_needed):
             return empty_nodes
-        else:
-            chosen_worker_indices = empty_nodes
-            for nodeid in chosen_worker_indices:
-                prio_queue.put((estimated_task_duration,nodeid))
 
+        chosen_worker_indices = empty_nodes
+        for nodeid in chosen_worker_indices:
+            prio_queue.put((estimated_task_duration,nodeid))
+
+        # Find workers_needed number of workers from priority queues by including workers with the smallest of wait times first
         queue_length,worker = prio_queue.get()
         while (workers_needed > len(chosen_worker_indices)):
             next_queue_length,next_worker = prio_queue.get()
@@ -378,6 +386,7 @@ class Simulation(object):
             worker = next_worker 
 
         assert workers_needed == len(chosen_worker_indices)
+        # workers_needed number of least loaded nodes
         return chosen_worker_indices
 
     #Simulation class
@@ -464,11 +473,14 @@ class Simulation(object):
         self.jobs_scheduled = 1
         self.event_queue.put((float(line.split()[0]), PeriodicTimerEvent(self)))
 
+        # Jobs are sorted by order of arrival
+        # Events can be either JobArrival or PeriodicTimer
         while (not self.event_queue.empty()):
             current_time, event = self.event_queue.get()
             assert current_time >= last_time
             last_time = current_time
             new_events = event.run(current_time)
+            # Side effect events created by running JobArrival or PeriodicTimer events
             for new_event in new_events:
                 self.event_queue.put(new_event)
 
@@ -513,6 +525,5 @@ finished_file.close()
 load_file.close()
 
 print >> stats_file, "STATS_TASKS_TOTAL_FINISHED:             ",          stats.STATS_TASKS_TOTAL_FINISHED
-print >> stats_file, "STATS_TASKS_LONG_FINISHED:             ",          stats.STATS_TASKS_LONG_FINISHED
 print >> stats_file, "STATS_JOBS_FINISHED:             ",          s.jobs_scheduled
 stats_file.close()
