@@ -62,9 +62,6 @@ class Job(object):
         self.off_mean_bottom = off_mean_bottom
         self.off_mean_top = off_mean_top
 
-        self.job_type_for_scheduling = BIG
-        self.job_type_for_comparison = BIG
-
         self.file_task_execution_time(job_args)
         self.estimate_distribution = estimate_distribution
 
@@ -169,15 +166,14 @@ class PeriodicTimerEvent(Event):
 #####################################################################################################################
 
 class ProbeEvent(Event):
-    def __init__(self, worker, job_id, task_length, job_type_for_scheduling, btmap):
+    def __init__(self, worker, job_id, task_length, btmap):
         self.worker = worker
         self.job_id = job_id
         self.task_length = task_length
-        self.job_type_for_scheduling = job_type_for_scheduling
         self.btmap = btmap
 
     def run(self, current_time):
-        return self.worker.add_probe(self.job_id, self.task_length, self.job_type_for_scheduling, current_time,self.btmap)
+        return self.worker.add_probe(self.job_id, self.task_length, current_time, self.btmap)
 
 #####################################################################################################################
 #####################################################################################################################
@@ -223,11 +219,11 @@ class NoopGetTaskResponseEvent(Event):
 #####################################################################################################################
 
 class TaskEndEvent():
-    def __init__(self, worker, status_keeper, job_id, job_type_for_scheduling, estimated_task_duration, this_task_id):
+    def __init__(self, worker, status_keeper, job_id, estimated_task_duration, this_task_id):
         self.worker = worker
         self.status_keeper = status_keeper
         self.job_id = job_id
-        self.job_type_for_scheduling = job_type_for_scheduling
+        self.job_type_for_scheduling = BIG
         self.estimated_task_duration = estimated_task_duration
         self.this_task_id = this_task_id
 
@@ -262,7 +258,7 @@ class Worker(object):
         self.btmap = None
 
     #Worker class
-    def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap):
+    def add_probe(self, job_id, task_length, current_time, btmap):
         global stats
         self.queued_probes.append([job_id,task_length,(self.executing_big == True or self.queued_big > 0)])
         self.queued_big     = self.queued_big + 1
@@ -293,20 +289,12 @@ class Worker(object):
         job_id = self.queued_probes[pos][0]
         estimated_task_duration = self.queued_probes[pos][1]
 
-        self.executing_big = self.simulation.jobs[job_id].job_type_for_scheduling == BIG
-        if self.executing_big:
-            self.queued_big                 = self.queued_big -1
-            self.tstamp_start_crt_big_task  = current_time
-            self.estruntime_crt_task        = estimated_task_duration
-        else:
-            self.tstamp_start_crt_big_task = -1
+        self.queued_big                 = self.queued_big -1
+        self.tstamp_start_crt_big_task  = current_time
+        self.estruntime_crt_task        = estimated_task_duration
 
         was_successful, events = self.simulation.get_task(job_id, self, current_time)
-        job_bydef_big = (self.simulation.jobs[job_id].job_type_for_comparison == BIG)
-
-        if(not was_successful or job_bydef_big):
-            #so the probe remains if SBP is on, was succesful and is small        
-            self.queued_probes.pop(pos)
+        self.queued_probes.pop(pos)
 
         return events
 
@@ -401,9 +389,8 @@ class Simulation(object):
         global stats
         self.jobs[job.id] = job
         probe_events = []
-        pdb.set_trace()
         for worker_index in worker_indices:
-            probe_events.append((current_time + NETWORK_DELAY, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+            probe_events.append((current_time + NETWORK_DELAY, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, btmap)))
             job.probed_workers.add(worker_index)
         
         return probe_events
@@ -442,9 +429,9 @@ class Simulation(object):
         is_job_complete = job.update_task_completion_details(task_completion_time)
 
         if is_job_complete:
-            print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time)
+            print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",BIG, " total_job_running_time: ",(job.end_time - job.start_time)
 
-        events.append((task_completion_time, TaskEndEvent(worker, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, job.estimated_task_duration, this_task_id)))
+        events.append((task_completion_time, TaskEndEvent(worker, self.cluster_status_keeper, job.id, job.estimated_task_duration, this_task_id)))
 
         if len(job.unscheduled_tasks) == 0:
             logging.info("Finished scheduling tasks for job %s" % job.id)
@@ -507,7 +494,7 @@ if(len(sys.argv) != 8):
 
 
 WORKLOAD_FILE                    = sys.argv[1]
-SLOTS_PER_WORKER                 = int(sys.argv[2])           #
+SLOTS_PER_WORKER                 = int(sys.argv[2])           # Always 1
 MONITOR_INTERVAL                 = int(sys.argv[3])           #
 ESTIMATION                       = sys.argv[4]                # MEAN, CONSTANT or RANDOM
 OFF_MEAN_BOTTOM                  = float(sys.argv[5])         # > 0
