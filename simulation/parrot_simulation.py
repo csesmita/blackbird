@@ -37,7 +37,8 @@ class EstimationErrorDistribution:
 
 class Job(object):
     job_count = 1
-    per_job_task_info = {}
+    # Keeps track of whether task is assigned (-1), started (current_time), or has finished (null).
+    # per_job_task_info = {}
 
     def __init__(self, task_distribution, line, estimate_distribution, off_mean_bottom, off_mean_top):
         global job_start_tstamps
@@ -127,13 +128,16 @@ class JobArrival(Event, file):
         # possible workers = all workers in the system
         possible_workers = self.simulation.big_partition_workers_hash
 
+        # Find highly ranked nodes - In this case, inverse of the waiting times.
         worker_indices = self.simulation.find_workers_long_job_prio(self.job.num_tasks, self.job.estimated_task_duration, workers_queue_status, current_time, self.simulation, possible_workers)
+        # Update cluster occupancy - Mark worker nodes busy for job's estimated runtime duration
         self.simulation.cluster_status_keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration)
 
-        Job.per_job_task_info[self.job.id] = {}
-        for tasknr in range(0,self.job.num_tasks):
-            Job.per_job_task_info[self.job.id][tasknr] =- 1
+        #Job.per_job_task_info[self.job.id] = {}
+        #for tasknr in range(0,self.job.num_tasks):
+        #    Job.per_job_task_info[self.job.id][tasknr] =- 1
 
+        # Get all probe events associated with this job, which when run, will place the probes on the workers
         new_events = self.simulation.send_probes(self.job, current_time, worker_indices, btmap)
 
         # Creating a new Job Arrival event for the next job in the trace
@@ -141,6 +145,7 @@ class JobArrival(Event, file):
         if (line == ''):
             return new_events
 
+        # Append the next job event to this list of task probes
         self.job = Job(self.task_distribution, line, self.job.estimate_distribution, self.job.off_mean_bottom, self.job.off_mean_top)
         new_events.append((self.job.start_time, self))
         self.simulation.jobs_scheduled += 1
@@ -333,8 +338,10 @@ class Simulation(object):
 
         self.btmap = None
 
-    #Simulation class
+    # Simulation class
+    # Scheduler Node functionality - Look for good placement worker nodes
     def find_workers_long_job_prio(self, num_tasks, estimated_task_duration, workers_queue_status, current_time, simulation, hash_workers_considered):
+        # Task Splitter - Assign tasks of job to different workers.
         workers_needed = num_tasks
         prio_queue = Queue.PriorityQueue()
 
@@ -474,7 +481,10 @@ class Simulation(object):
         self.event_queue.put((float(line.split()[0]), PeriodicTimerEvent(self)))
 
         # Jobs are sorted by order of arrival
-        # Events can be either JobArrival or PeriodicTimer
+        # Events can be either JobArrival, PeriodicTimer, Job, or ProbeEvent
+        # This behaves like a centralized scheduler by having all events enqueued one after the
+        # other including all scheduling events
+        # Change this part of the logic for Parrot.
         while (not self.event_queue.empty()):
             current_time, event = self.event_queue.get()
             assert current_time >= last_time
