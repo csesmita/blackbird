@@ -214,7 +214,7 @@ class Simulation(object):
     def send_tasks(self, job, current_time):
         self.jobs[job.id] = job
         #random.shuffle(self.worker_indices)
-        print("Number of unscheduled jobs ", len(job.unscheduled_tasks))
+        print "Number of unscheduled tasks for job id ", job.id," is ", len(job.unscheduled_tasks)
         print "Printing highly ranked node - "
         for i, worker in enumerate(sorted(self.workers, key=lambda worker: worker.num_queued_tasks)):
             print "Worker ", worker.id, " with queue_length ", worker.queue_length()
@@ -222,12 +222,14 @@ class Simulation(object):
         #for i, worker_index in enumerate(self.worker_indices[:len(job.unscheduled_tasks)]):
         # Emit scheduling placement one task at a time
         task_index = 0
-        while task_index < len(job.unscheduled_tasks):
-            for worker in sorted(self.workers, key=lambda worker: worker.num_queued_tasks):
-                print "Assigning task %s to worker %s" % (task_index, worker.id)
-                task_arrival_events.append(
-                     (current_time + NETWORK_DELAY,
-                      TaskArrival(self.workers[worker.id], job.unscheduled_tasks[task_index], job.id)))
+
+        for worker in sorted(self.workers, key=lambda worker: worker.num_queued_tasks):
+            if task_index == len(job.unscheduled_tasks):
+                break
+            print "Assigning task %s to worker %s" % (task_index, worker.id)
+            task_arrival_events.append(
+                (current_time + NETWORK_DELAY,
+                 TaskArrival(self.workers[worker.id], job.unscheduled_tasks[task_index], job.id)))
             task_index += 1
         return task_arrival_events
 
