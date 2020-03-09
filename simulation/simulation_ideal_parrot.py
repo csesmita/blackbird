@@ -20,14 +20,16 @@ import math
 import numpy
 import random
 import Queue
+import time
 from util import Job, TaskDistributions
 
 #All times simulated are in milliseconds
-MEDIAN_TASK_DURATION = 100
+MEDIAN_TASK_DURATION = 1000
 NETWORK_DELAY = 0.5
 TASKS_PER_JOB = 100
-SLOTS_PER_WORKER = 4
-TOTAL_WORKERS = 10000
+SLOTS_PER_WORKER = 1
+TOTAL_WORKERS = 100
+DAMPENING_FACTOR = 0.90
 
 def get_percentile(N, percent, key=lambda x:x):
     if not N:
@@ -61,6 +63,7 @@ class Event(object):
                                   "each class subclassing Event")
 
 class JobArrival(Event):
+    event_count = 0
     """ Event to signify a job arriving at a scheduler. """
     def __init__(self, simulation, interarrival_delay, task_distribution):
         self.simulation = simulation
@@ -68,8 +71,10 @@ class JobArrival(Event):
         self.task_distribution = task_distribution
 
     def run(self, current_time):
+        JobArrival.event_count += 1
         #print "Processing JobArrival at time ", current_time
-        job = Job(TASKS_PER_JOB, current_time, self.task_distribution, MEDIAN_TASK_DURATION)
+        job = Job(TASKS_PER_JOB, current_time, self.task_distribution,
+                  MEDIAN_TASK_DURATION*(DAMPENING_FACTOR ** JobArrival.event_count))
         #print "Job %s arrived at %s" % (job.id, current_time)
         # Schedule job.
         new_events = self.simulation.send_tasks(job, current_time)
@@ -154,7 +159,7 @@ class Worker(object):
             #print "Launching task for job %s on worker %s" % (job_id, self.id)
             task_end_time = current_time + task_duration
             #print ("Task for job %s on worker %s launched at %s; will complete at %s" %
-            #       (job_id, self.id, current_time, task_end_time))
+            #       (jobadd_task_id, self.id, current_time, task_end_time))
             self.simulation.add_task_completion_time(job_id, task_end_time)
             return [(task_end_time, TaskEndEvent(self))]
         return []
@@ -225,9 +230,12 @@ class Simulation(object):
         # for i, worker_index in enumerate(self.worker_indices[:len(job.unscheduled_tasks)]):
         # Emit scheduling placement one task at a time
         task_index = 0
-        for worker in sorted(self.workers, key=lambda worker: worker.num_queued_tasks):
+        while task_index < len(job.unscheduled_tasks):
+            worker = sorted(self.workers, key=lambda worker: worker.num_queued_tasks)[0]
+            """
             if task_index == len(job.unscheduled_tasks):
                 break
+            """
             #print "Assigning task %s to worker %s" % (task_index, worker.id)
             task_arrival_events.append(
                 (current_time + NETWORK_DELAY,
@@ -241,6 +249,7 @@ class Simulation(object):
             self.remaining_jobs -= 1
 
     def run(self):
+        start_time = time.time()
         self.event_queue.put((0, JobArrival(self, self.interarrival_delay, self.task_distribution)))
         last_time = 0
         while self.remaining_jobs > 0:
@@ -252,6 +261,7 @@ class Simulation(object):
             for new_event in new_events:
                 self.event_queue.put(new_event)
 
+        now_time = time.time()
         print ("Simulation ended after %s milliseconds (%s jobs started)" %
                (last_time, len(self.jobs)))
         complete_jobs = [j for j in self.jobs.values() if j.completed_tasks_count == j.num_tasks]
@@ -265,10 +275,11 @@ class Simulation(object):
 
             longest_tasks = [job.longest_task for job in complete_jobs]
             plot_cdf(longest_tasks, "%s_ideal_response_time.data" % self.file_prefix)
+            print "Simulation took", (now_time - start_time), "sec"
         return response_times
 
 def main():
-    sim = Simulation(100000, "parrot", 0.90, TaskDistributions.CONSTANT)
+    sim = Simulation(10000, "parrot", 0.90, TaskDistributions.CONSTANT)
     sim.run()
 
 if __name__ == "__main__":
