@@ -24,12 +24,12 @@ import time
 from util import Job, TaskDistributions
 
 #All times simulated are in milliseconds
-MEDIAN_TASK_DURATION = 1000
+MEDIAN_TASK_DURATION = 0.1
 NETWORK_DELAY = 0.5
-TASKS_PER_JOB = 100
+TASKS_PER_JOB = 1
 SLOTS_PER_WORKER = 1
-TOTAL_WORKERS = 100
-DAMPENING_FACTOR = 0.90
+TOTAL_WORKERS = 1
+DAMPENING_FACTOR = 1
 
 def get_percentile(N, percent, key=lambda x:x):
     if not N:
@@ -72,31 +72,32 @@ class JobArrival(Event):
 
     def run(self, current_time):
         JobArrival.event_count += 1
-        #print "Processing JobArrival at time ", current_time
+        print "Processing JobArrival at time ", current_time
         job = Job(TASKS_PER_JOB, current_time, self.task_distribution,
                   MEDIAN_TASK_DURATION*(DAMPENING_FACTOR ** JobArrival.event_count))
-        #print "Job %s arrived at %s" % (job.id, current_time)
+        #if job.id == 0 or job.id == 1:
+        print "Job %s arrived at %s" % (job.id, current_time)
         # Schedule job.
         new_events = self.simulation.send_tasks(job, current_time)
         # Add new Job Arrival event, for the next job to arrive after this one.
-        arrival_delay = random.expovariate(1.0 / self.interarrival_delay)
-        new_events.append((current_time + arrival_delay, self))
-        #print "Returning %s events which are - " % len(new_events)
-        #for event in new_events:
-        #    print event
+        if JobArrival.event_count < self.simulation.total_jobs:
+            arrival_delay = random.expovariate(1.0 / self.interarrival_delay)
+            new_events.append((current_time + arrival_delay, self))
+        print "Returning %s events which are - " % (len(new_events))
+        for event in new_events:
+            print "(",event[0], event[1],")"
         return new_events
 
 class TaskArrival(Event):
     """ Event to signify a task arriving at a worker. """
-    def __init__(self, worker, task_duration, job_id):
+    def __init__(self, future_time, worker, task_duration, job_id):
         self.worker = worker
         self.task_duration = task_duration
-        self.job_id = job_id
-        self.worker.enqueue_task(task_duration, job_id)
+        self.worker.enqueue_future_task(future_time, task_duration, job_id)
 
     def run(self, current_time):
-        #print "Processing TaskArrival at time ", current_time
-        return self.worker.add_task(current_time, self.job_id)
+        #print "Processing TaskArrival for job", self.job_id, "at time ", current_time
+        return self.worker.add_task(current_time)
 
 class TaskEndEvent():
     def __init__(self, worker):
@@ -111,55 +112,53 @@ class Worker(object):
         self.simulation = simulation
         self.free_slots = num_slots
         # Just a list of (task duration, job id) pairs.
-        self.queued_tasks = Queue.Queue()
+        self.queued_tasks = Queue.PriorityQueue()
+        self.future_tasks = Queue.PriorityQueue()
         self.id = id
-        self.num_queued_tasks = 0
 
-    def enqueue_task(self, task_duration, job_id):
-        #print "Task for job %s arrived at worker %s" % (job_id, self.id)
-        self.queued_tasks.put((task_duration, job_id))
-        self.num_queued_tasks += 1
+    def enqueue_future_task(self, future_time, task_duration, job_id):
+        print "Enqueuing future Task for job %s at worker %s" % (job_id, self.id)
+        self.future_tasks.put((future_time, [task_duration, job_id]))
+        print "Future tasks queue is as follows - ", self.future_tasks.queue
 
-    def add_task(self, current_time, job_id):
-        #print "Task for job %s processed at worker %s" % (job_id, self.id)
+    def add_task(self, current_time):
+        # Add tasks from future queue
+        print "Future tasks queue is as follows - ", self.future_tasks.queue
+        while(not self.future_tasks.empty()):
+            future_time, queue_details = self.future_tasks.get()
+            if future_time <= current_time:
+                # Add in the task_duration and job id to the queue
+                # Since future time is les sthan current_time,
+                # current_time will account for queueing delays
+                self.queued_tasks.put((queue_details[0], queue_details[1]))
+                print "Task for job %s will be processed at worker %s at time %f" % (queue_details[1], self.id, current_time)
+            else:
+                self.future_tasks.put((future_time, queue_details))
+                break
         return self.maybe_start_task(current_time)
 
     def free_slot(self, current_time):
         """ Frees a slot on the worker and attempts to launch another task in that slot. """
         self.free_slots += 1
-        get_task_events = self.maybe_start_task(current_time)
+        get_task_events = self.add_task(current_time)
         return get_task_events
 
     def queue_length(self):
-        queue_length = self.num_queued_tasks
         if self.free_slots > 0:
-            #assert self.num_queued_tasks == 0
+            assert self.queued_tasks.empty()
             return -self.free_slots
-        return queue_length
+        return self.queued_tasks.qsize()
 
     def maybe_start_task(self, current_time):
-        """
-        if not self.queued_tasks.empty() and self.simulation.free_slots > 0:
-            # Account for "running" task
-            self.free_slots -= 1
-            task_duration, job_id = self.queued_tasks.get()
-            self.num_queued_tasks -= 1
-            #print "Launching task for job %s on worker %s" % (job_id, self.id)
-            task_end_time = current_time + task_duration
-            print ("Task for job %s on worker %s launched at %s; will complete at %s" %
-            (job_id, self.id, current_time, task_end_time))
-            self.simulation.add_task_completion_time(job_id, task_end_time)
-            return [(task_end_time, TaskEndEvent(self))]
-        return []
-        """
         if not self.queued_tasks.empty() and self.free_slots > 0:
             # Account for "running" task
             self.free_slots -= 1
             task_duration, job_id = self.queued_tasks.get()
-            #print "Launching task for job %s on worker %s" % (job_id, self.id)
+            print "Launching task for job %s on worker %s at %f (duration %f)" % (job_id, self.id, current_time, task_duration)
             task_end_time = current_time + task_duration
             #print ("Task for job %s on worker %s launched at %s; will complete at %s" %
             #       (jobadd_task_id, self.id, current_time, task_end_time))
+            print "Task for job %s finished at %f" % (job_id, task_end_time)
             self.simulation.add_task_completion_time(job_id, task_end_time)
             return [(task_end_time, TaskEndEvent(self))]
         return []
@@ -172,6 +171,7 @@ class Simulation(object):
                (self.interarrival_delay, avg_used_slots))
         self.jobs = {}
         self.remaining_jobs = num_jobs
+        self.total_jobs = num_jobs
         self.event_queue = Queue.PriorityQueue()
         self.workers = []
         self.file_prefix = file_prefix
@@ -181,40 +181,6 @@ class Simulation(object):
         self.worker_indices = range(TOTAL_WORKERS)
         self.task_distribution = task_distribution
         self.unscheduled_jobs = []
-    """
-    def schedule_tasks(self, job, current_time):
-        self.jobs[job.id] = job
-        self.unscheduled_jobs.append(job)
-        #print "Job %s arrived at %s" % (job.id, current_time)
-        return self.maybe_launch_tasks(current_time)
-    
-
-    def maybe_launch_tasks(self, current_time):
-        task_end_events = []
-        while self.num_free_slots > 0 and len(self.unscheduled_jobs) > 0:
-            self.num_free_slots -= 1
-            job = self.unscheduled_jobs[0]
-            task_duration = job.unscheduled_tasks[0]
-            job.unscheduled_tasks = job.unscheduled_tasks[1:]
-            # if len(job.unscheduled_tasks) == 0:
-            # logging.info("Finished scheduling tasks for job %s" % job.id)
-            print ("Launching task for job %s at %s (duration %s); %s remaining slots" %
-                   (job.id, current_time + NETWORK_DELAY, task_duration, self.num_free_slots))
-            task_end_time = current_time + task_duration + NETWORK_DELAY
-            scheduler_notify_time = task_end_time + NETWORK_DELAY
-            task_end_events.append((scheduler_notify_time, TaskEndEvent(self)))
-
-            job_complete = job.task_completed(task_end_time)
-            if job_complete:
-                #print "Completed job %s in %s" % (job.id, job.end_time - job.start_time)
-                self.remaining_jobs -= 1
-                self.unscheduled_jobs = self.unscheduled_jobs[1:]
-        return task_end_events
-        
-    def free_slot(self, current_time):
-        self.num_free_slots += 1
-        return self.maybe_launch_tasks(current_time)    
-    """
 
     # Assigns tasks to the highly ranked node
     def send_tasks(self, job, current_time):
@@ -231,15 +197,12 @@ class Simulation(object):
         # Emit scheduling placement one task at a time
         task_index = 0
         while task_index < len(job.unscheduled_tasks):
-            worker = sorted(self.workers, key=lambda worker: worker.num_queued_tasks)[0]
-            """
-            if task_index == len(job.unscheduled_tasks):
-                break
-            """
-            #print "Assigning task %s to worker %s" % (task_index, worker.id)
+            worker = sorted(self.workers, key=lambda worker: worker.queue_length())[0]
+            print "Assigning task %s to worker %s" % (task_index, worker.id)
+            future_time = current_time + NETWORK_DELAY
             task_arrival_events.append(
-                (current_time + NETWORK_DELAY,
-                 TaskArrival(self.workers[worker.id], job.unscheduled_tasks[task_index], job.id)))
+                (future_time,
+                 TaskArrival(future_time, self.workers[worker.id], job.unscheduled_tasks[task_index], job.id)))
             task_index += 1
         return task_arrival_events
 
@@ -252,18 +215,20 @@ class Simulation(object):
         start_time = time.time()
         self.event_queue.put((0, JobArrival(self, self.interarrival_delay, self.task_distribution)))
         last_time = 0
+        iteration = 0
         while self.remaining_jobs > 0:
             current_time, event = self.event_queue.get()
-            #print "Got EVENT ", event
             assert current_time >= last_time
             last_time = current_time
             new_events = event.run(current_time)
+            #print "Iteration %d events - " % (iteration)
             for new_event in new_events:
                 self.event_queue.put(new_event)
+            iteration += 1
 
         now_time = time.time()
         print ("Simulation ended after %s milliseconds (%s jobs started)" %
-               (last_time, len(self.jobs)))
+           (last_time, len(self.jobs)))
         complete_jobs = [j for j in self.jobs.values() if j.completed_tasks_count == j.num_tasks]
         print "%s complete jobs" % len(complete_jobs)
         response_times = [job.end_time - job.start_time for job in complete_jobs]
@@ -279,7 +244,7 @@ class Simulation(object):
         return response_times
 
 def main():
-    sim = Simulation(10000, "parrot", 0.90, TaskDistributions.CONSTANT)
+    sim = Simulation(2, "parrot", 0.90, TaskDistributions.CONSTANT)
     sim.run()
 
 if __name__ == "__main__":
