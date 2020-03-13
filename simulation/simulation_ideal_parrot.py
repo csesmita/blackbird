@@ -62,68 +62,37 @@ class Event(object):
         raise NotImplementedError("The run() method must be implemented by "
                                   "each class subclassing Event")
 
-""" Event to signify a job being emitted in the system
-Does the following - 
-1. Emit a job at a worker node
-2. Simulate the next emit event
-
-class JobEmitter(Event):
-    event_count = 0
-    def __init__(self, simulation, interarrival_delay, task_distribution):
-        self.simulation = simulation
-        self.interarrival_delay = interarrival_delay
-        self.task_distribution = task_distribution
-
-    def run(self, current_time):
-        JobEmitter.event_count += 1
-        # Create a new JobArrival and assign it randomly to one of the workers
-        arrival_delay = random.expovariate(1.0 / self.interarrival_delay)
-        worker_index = random.choice(self.simulation.worker_indices)
-        # No network delays here. Job just arrives at a node
-        JobArrival(worker_index, current_time, self).run()
-        # Return a new job emit event to keep the simulation going
-        new_events = []
-        new_events.append(current_time + arrival_delay, self)
-        return new_events
 """
-
+Event to signify a job arriving at a scheduler node
+Does the following - 
+1. Adds the job into scheduler queue
+"""
 class JobArrival(Event):
     event_count = 0
     """ Event to signify a job arriving at a scheduler. """
-    def __init__(self, simulation, interarrival_delay, task_distribution):
+    def __init__(self, simulation, interarrival_delay, task_distribution, worker_index):
         self.simulation = simulation
         self.interarrival_delay = interarrival_delay
         self.task_distribution = task_distribution
+        self.worker_index = worker_index
 
     def run(self, current_time):
         JobArrival.event_count += 1
-        print "Job %s arrived at %s" % (job.id, current_time)
+        print "Job %s arrived at %s at worker %s" % (job.id, current_time, self.worker_index)
         job = Job(TASKS_PER_JOB, current_time, self.task_distribution,
                   (DAMPENING_FACTOR ** JobArrival.event_count) * MEDIAN_TASK_DURATION)
-        # Create a new JobArrival and assign it randomly to one of the workers
-        worker_index = random.choice(self.simulation.worker_indices)
-        # Schedule job to the worker
-        self.simulation.workers[worker_index].job_queue.put((current_time, job))
-
         new_events = self.simulation.send_tasks(job, current_time)
 
-        # Use this block to generate random job arrivals
         # Add new Job Arrival event, for the next job to arrive after this one.
         arrival_delay = random.expovariate(1.0 / self.interarrival_delay)
-        new_events.append((current_time + arrival_delay, self))
-        # Use this block to generate random job arrivals
-
-        #print "Retuning %s events" % len(new_events)
-        """
-        # Use this block to compare against fixed arrival times
-        if JobArrival.event_count < self.simulation.total_jobs:
-            new_events.append((JobArrival.job_arrival[JobArrival.event_count], self))
-        # Use this block to compare against fixed arrival times    
-        """
+        worker_index = random.choice(self.simulation.worker_indices)
+        new_events.append((current_time + arrival_delay,
+                            JobArrival(self.simulation, self.interarrival_delay,
+                                       self.task_distribution, worker_index)))
         return new_events
 
 class TaskArrival(Event):
-    """ Event to signify a task arriving at a worker. """
+    """ Event to signify a task arriving at a worker. """s
     def __init__(self, future_time, worker, task_duration, job_id):
         self.worker = worker
         self.task_duration = task_duration
@@ -149,7 +118,6 @@ class Worker(object):
         self.queued_tasks = Queue.PriorityQueue()
         self.future_tasks = Queue.PriorityQueue()
         self.id = id
-        self.job_queue = Queue.PriorityQueue()
 
     def enqueue_future_task(self, future_time, task_duration, job_id):
         #print "Enqueuing future Task for job %s at worker %s" % (job_id, self.id)
@@ -217,7 +185,7 @@ class Simulation(object):
         self.task_distribution = task_distribution
         self.unscheduled_jobs = []
 
-    # Assigns tasks to the highly ranked node
+    # Also acts a s splitter - Assigns tasks to the highly ranked node
     def send_tasks(self, job, current_time):
         self.jobs[job.id] = job
         #random.shuffle(self.worker_indices)
@@ -234,10 +202,10 @@ class Simulation(object):
         while task_index < len(job.unscheduled_tasks):
             worker = sorted(self.workers, key=lambda worker: worker.queue_length())[0]
             #print "Assigning task %s to worker %s" % (task_index, worker.id)
-            future_time = current_time + NETWORK_DELAY
             task_arrival_events.append(
-                (future_time,
-                 TaskArrival(future_time, self.workers[worker.id], job.unscheduled_tasks[task_index], job.id)))
+                (current_time,
+                 TaskArrival(current_time, self.workers[worker.id],
+                             job.unscheduled_tasks[task_index], job.id)))
             task_index += 1
         return task_arrival_events
 
@@ -248,7 +216,8 @@ class Simulation(object):
 
     def run(self):
         start_time = time.time()
-        self.event_queue.put((0, JobEmitter(self, self.interarrival_delay, self.task_distribution)))
+        worker_index = random.choice(self.simulation.worker_indices)
+        self.event_queue.put((0, JobArrival(self, self.interarrival_delay, self.task_distribution, worker_index)))
         last_time = 0
         iteration = 0
         while self.remaining_jobs > 0:
