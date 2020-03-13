@@ -78,9 +78,9 @@ class JobArrival(Event):
 
     def run(self, current_time):
         JobArrival.event_count += 1
-        print "Job %s arrived at %s at worker %s" % (job.id, current_time, self.worker_index)
         job = Job(TASKS_PER_JOB, current_time, self.task_distribution,
                   (DAMPENING_FACTOR ** JobArrival.event_count) * MEDIAN_TASK_DURATION)
+        print "Job %s arrived at %s at worker %s" % (job.id, current_time, self.worker_index)
         new_events = self.simulation.send_tasks(job, current_time)
 
         # Add new Job Arrival event, for the next job to arrive after this one.
@@ -92,7 +92,7 @@ class JobArrival(Event):
         return new_events
 
 class TaskArrival(Event):
-    """ Event to signify a task arriving at a worker. """s
+    """ Event to signify a task arriving at a worker. """
     def __init__(self, future_time, worker, task_duration, job_id):
         self.worker = worker
         self.task_duration = task_duration
@@ -203,8 +203,8 @@ class Simulation(object):
             worker = sorted(self.workers, key=lambda worker: worker.queue_length())[0]
             #print "Assigning task %s to worker %s" % (task_index, worker.id)
             task_arrival_events.append(
-                (current_time,
-                 TaskArrival(current_time, self.workers[worker.id],
+                (current_time + NETWORK_DELAY,
+                 TaskArrival(current_time + NETWORK_DELAY, self.workers[worker.id],
                              job.unscheduled_tasks[task_index], job.id)))
             task_index += 1
         return task_arrival_events
@@ -216,7 +216,7 @@ class Simulation(object):
 
     def run(self):
         start_time = time.time()
-        worker_index = random.choice(self.simulation.worker_indices)
+        worker_index = random.choice(self.worker_indices)
         self.event_queue.put((0, JobArrival(self, self.interarrival_delay, self.task_distribution, worker_index)))
         last_time = 0
         iteration = 0
@@ -236,7 +236,6 @@ class Simulation(object):
         complete_jobs = [j for j in self.jobs.values() if j.completed_tasks_count == j.num_tasks]
         print "%s complete jobs" % len(complete_jobs)
         response_times = [job.end_time - job.start_time for job in complete_jobs]
-        #"if job.start_time > 500"
         if len(response_times) > 0:
             print "Included %s jobs" % len(response_times)
             plot_cdf(response_times, "%s_response_times.data" % self.file_prefix)
@@ -244,11 +243,11 @@ class Simulation(object):
 
             longest_tasks = [job.longest_task for job in complete_jobs]
             plot_cdf(longest_tasks, "%s_ideal_response_time.data" % self.file_prefix)
-            #print "Simulation took", (now_time - start_time), "sec"
+        #print "Simulation took", (now_time - start_time), "sec"
         return response_times
 
 def main():
-    sim = Simulation(3, "parrot", 0.90, TaskDistributions.CONSTANT)
+    sim = Simulation(1, "parrot", 0.90, TaskDistributions.CONSTANT)
     sim.run()
 
 if __name__ == "__main__":
