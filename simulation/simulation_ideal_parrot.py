@@ -24,11 +24,11 @@ import random
 from util import Job, TaskDistributions
 
 #All times simulated are in milliseconds
-MEDIAN_TASK_DURATION = 0.1
+MEDIAN_TASK_DURATION = 80000
 NETWORK_DELAY = 0.5
-TASKS_PER_JOB = 1
-SLOTS_PER_WORKER = 1
-TOTAL_WORKERS = 1
+TASKS_PER_JOB = 30
+SLOTS_PER_WORKER = 2
+TOTAL_WORKERS = 500
 DAMPENING_FACTOR = 1
 
 def get_percentile(N, percent, key=lambda x:x):
@@ -69,6 +69,8 @@ Does the following -
 """
 class JobArrival(Event):
     event_count = 0
+    job_arrival = [0.0, 0.90, 1.55, 1.876, 2.50, 3.4, 6.0, 7.88, 9.88, 10.5, 11.5]
+    NUM_STATIC_ARRIVALS = 10
     """ Event to signify a job arriving at a scheduler. """
     def __init__(self, simulation, interarrival_delay, task_distribution, worker_index):
         self.simulation = simulation
@@ -80,15 +82,24 @@ class JobArrival(Event):
         JobArrival.event_count += 1
         job = Job(TASKS_PER_JOB, current_time, self.task_distribution,
                   (DAMPENING_FACTOR ** JobArrival.event_count) * MEDIAN_TASK_DURATION)
-        print "Job %s arrived at %s at worker %s" % (job.id, current_time, self.worker_index)
+        #print "Job %s arrived at %s at worker %s" % (job.id, current_time, self.worker_index)
         new_events = self.simulation.send_tasks(job, current_time)
 
+        """
         # Add new Job Arrival event, for the next job to arrive after this one.
         arrival_delay = random.expovariate(1.0 / self.interarrival_delay)
         worker_index = random.choice(self.simulation.worker_indices)
         new_events.append((current_time + arrival_delay,
                             JobArrival(self.simulation, self.interarrival_delay,
                                        self.task_distribution, worker_index)))
+        """
+        # Use this block to compare against fixed arrival times
+        if JobArrival.event_count < self.simulation.total_jobs:
+            arrival_time = JobArrival.job_arrival[JobArrival.event_count % JobArrival.NUM_STATIC_ARRIVALS] + \
+                           JobArrival.event_count/JobArrival.NUM_STATIC_ARRIVALS*JobArrival.job_arrival[JobArrival.NUM_STATIC_ARRIVALS - 1]
+            new_events.append((arrival_time, self))
+        # Use this block to compare against fixed arrival times
+
         return new_events
 
 class TaskArrival(Event):
@@ -96,6 +107,7 @@ class TaskArrival(Event):
     def __init__(self, future_time, worker, task_duration, job_id):
         self.worker = worker
         self.task_duration = task_duration
+        self.job_id = job_id
         self.worker.enqueue_future_task(future_time, task_duration, job_id)
 
     def run(self, current_time):
@@ -120,15 +132,18 @@ class Worker(object):
         self.id = id
 
     def enqueue_future_task(self, future_time, task_duration, job_id):
-        #print "Enqueuing future Task for job %s at worker %s" % (job_id, self.id)
+        #print "Enqueuing future Task for job %s at worker %s for future time %s" % (job_id, self.id, future_time)
         self.future_tasks.put((future_time, [task_duration, job_id]))
         #print "Future tasks queue is as follows - ", self.future_tasks.queue
 
     def add_task(self, current_time):
         # Add tasks from future queue
         #print "Future tasks queue is as follows - ", self.future_tasks.queue
+        last_future_time = 0
         while(not self.future_tasks.empty()):
             future_time, queue_details = self.future_tasks.get()
+            assert last_future_time <= future_time
+            last_future_time = future_time
             if future_time <= current_time:
                 # Add in the task_duration and job id to the queue
                 # Since future time is less than current_time,
@@ -149,19 +164,19 @@ class Worker(object):
     def queue_length(self):
         if self.free_slots > 0:
             assert self.queued_tasks.empty()
-            return -self.free_slots
-        return self.queued_tasks.qsize()
+            return -self.free_slots + self.future_tasks.qsize()
+        return self.queued_tasks.qsize() + self.future_tasks.qsize()
 
     def maybe_start_task(self, current_time):
         if not self.queued_tasks.empty() and self.free_slots > 0:
             # Account for "running" task
             self.free_slots -= 1
             task_duration, job_id = self.queued_tasks.get()
-            print "Launching task for job %s on worker %s at %f (duration %f)" % (job_id, self.id, current_time, task_duration)
+            #print "Launching task for job %s on worker %s at %f (duration %f)" % (job_id, self.id, current_time, task_duration)
             task_end_time = current_time + task_duration
             #print ("Task for job %s on worker %s launched at %s; will complete at %s" %
-            #       (jobadd_task_id, self.id, current_time, task_end_time))
-            print "Task for job %s finished at %f" % (job_id, task_end_time)
+            #       (job_id, self.id, current_time, task_end_time))
+            #print "Task for job %s finished at %f" % (job_id, task_end_time)
             self.simulation.add_task_completion_time(job_id, task_end_time)
             return [(task_end_time, TaskEndEvent(self))]
         return []
@@ -200,7 +215,7 @@ class Simulation(object):
         # Emit scheduling placement one task at a time
         task_index = 0
         while task_index < len(job.unscheduled_tasks):
-            worker = sorted(self.workers, key=lambda worker: worker.queue_length())[0]
+            worker = sorted(self.workers, key=lambda worker: (worker.queue_length()))[0]
             #print "Assigning task %s to worker %s" % (task_index, worker.id)
             task_arrival_events.append(
                 (current_time + NETWORK_DELAY,
@@ -240,14 +255,13 @@ class Simulation(object):
             print "Included %s jobs" % len(response_times)
             plot_cdf(response_times, "%s_response_times.data" % self.file_prefix)
             print "Average response time: ", numpy.mean(response_times)
-
             longest_tasks = [job.longest_task for job in complete_jobs]
             plot_cdf(longest_tasks, "%s_ideal_response_time.data" % self.file_prefix)
-        #print "Simulation took", (now_time - start_time), "sec"
+        print "Simulation took", (now_time - start_time), "sec"
         return response_times
 
 def main():
-    sim = Simulation(1, "parrot", 0.90, TaskDistributions.CONSTANT)
+    sim = Simulation(10000, "parrot", 0.90, TaskDistributions.CONSTANT)
     sim.run()
 
 if __name__ == "__main__":

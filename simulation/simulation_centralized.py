@@ -25,11 +25,11 @@ import time
 
 from util import Job, TaskDistributions
 
-MEDIAN_TASK_DURATION = 0.1
+MEDIAN_TASK_DURATION = 80000
 NETWORK_DELAY = 0.5
-TASKS_PER_JOB = 1
-SLOTS_PER_WORKER = 1
-TOTAL_WORKERS = 1
+TASKS_PER_JOB = 30
+SLOTS_PER_WORKER = 2
+TOTAL_WORKERS = 500
 DAMPENING_FACTOR = 1 # No dampening
 
 def get_percentile(N, percent, key=lambda x:x):
@@ -65,7 +65,8 @@ class Event(object):
 
 class JobArrival(Event):
     event_count = 0
-    job_arrival = [0.0, 0.090, 0.455, 0.876]
+    job_arrival = [0.0, 0.90, 1.55, 1.876, 2.50, 3.4, 6.0, 7.88, 9.88, 10.5]
+    NUM_STATIC_ARRIVALS = 10
     """ Event to signify a job arriving at a scheduler. """
     def __init__(self, simulation, interarrival_delay, task_distribution):
         self.simulation = simulation
@@ -81,6 +82,7 @@ class JobArrival(Event):
         # Schedule job.
         new_events = self.simulation.schedule_tasks(job, current_time)
 
+        """
         # Use this block to generate random job arrivals
         # Add new Job Arrival event, for the next job to arrive after this one.
         arrival_delay = random.expovariate(1.0 / self.interarrival_delay)
@@ -91,9 +93,11 @@ class JobArrival(Event):
         """
         # Use this block to compare against fixed arrival times
         if JobArrival.event_count < self.simulation.total_jobs:
-            new_events.append((JobArrival.job_arrival[JobArrival.event_count], self))
-        # Use this block to compare against fixed arrival times    
-        """
+            arrival_time = JobArrival.job_arrival[JobArrival.event_count % JobArrival.NUM_STATIC_ARRIVALS] + \
+                           JobArrival.event_count/JobArrival.NUM_STATIC_ARRIVALS*JobArrival.job_arrival[JobArrival.NUM_STATIC_ARRIVALS - 1]
+            new_events.append((arrival_time, self))
+        # Use this block to compare against fixed arrival times
+
         return new_events
 
 class TaskEndEvent():
@@ -123,7 +127,7 @@ class Simulation(object):
     def schedule_tasks(self, job, current_time):
         self.jobs[job.id] = job
         self.unscheduled_jobs.append(job)
-        print "Job %s arrived at %s" % (job.id, current_time)
+        #print "Job %s arrived at %s" % (job.id, current_time)
         return self.maybe_launch_tasks(current_time)
 
     def maybe_launch_tasks(self, current_time):
@@ -135,8 +139,8 @@ class Simulation(object):
             job.unscheduled_tasks = job.unscheduled_tasks[1:]
             if len(job.unscheduled_tasks) == 0:
                 logging.info("Finished scheduling tasks for job %s" % job.id)
-            print ("Launching task for job %s at %s (duration %s); %s remaining slots" %
-                   (job.id, current_time + NETWORK_DELAY, task_duration, self.num_free_slots))
+            #print ("Launching task for job %s at %s (duration %s); %s remaining slots" %
+            #       (job.id, current_time + NETWORK_DELAY, task_duration, self.num_free_slots))
             task_end_time = current_time + task_duration + NETWORK_DELAY
             scheduler_notify_time = task_end_time + NETWORK_DELAY
             task_end_events.append((scheduler_notify_time, TaskEndEvent(self)))
@@ -181,7 +185,7 @@ class Simulation(object):
 
 def main():
     #logging.basicConfig(level=logging.INFO)
-    sim = Simulation(3, "centralized", 0.90, TaskDistributions.CONSTANT)
+    sim = Simulation(10000, "centralized", 0.90, TaskDistributions.CONSTANT)
     sim.run()
 
 if __name__ == "__main__":
