@@ -25,7 +25,7 @@ import time
 
 from util import Job, TaskDistributions
 
-MEDIAN_TASK_DURATION = 80000
+MEDIAN_TASK_DURATION = 8
 NETWORK_DELAY = 0.5
 TASKS_PER_JOB = 30
 SLOTS_PER_WORKER = 2
@@ -82,14 +82,13 @@ class JobArrival(Event):
         # Schedule job.
         new_events = self.simulation.schedule_tasks(job, current_time)
 
-        """
         # Use this block to generate random job arrivals
         # Add new Job Arrival event, for the next job to arrive after this one.
         arrival_delay = random.expovariate(1.0 / self.interarrival_delay)
         new_events.append((current_time + arrival_delay, self))
         # Use this block to generate random job arrivals
 
-        #print "Retuning %s events" % len(new_events)
+        #print "Returning %s events" % len(new_events)
         """
         # Use this block to compare against fixed arrival times
         if JobArrival.event_count < self.simulation.total_jobs:
@@ -97,7 +96,7 @@ class JobArrival(Event):
                            JobArrival.event_count/JobArrival.NUM_STATIC_ARRIVALS*JobArrival.job_arrival[JobArrival.NUM_STATIC_ARRIVALS - 1]
             new_events.append((arrival_time, self))
         # Use this block to compare against fixed arrival times
-
+        """
         return new_events
 
 class TaskEndEvent():
@@ -142,7 +141,10 @@ class Simulation(object):
             #print ("Launching task for job %s at %s (duration %s); %s remaining slots" %
             #       (job.id, current_time + NETWORK_DELAY, task_duration, self.num_free_slots))
             task_end_time = current_time + task_duration + NETWORK_DELAY
-            scheduler_notify_time = task_end_time + NETWORK_DELAY
+            #scheduler_notify_time = task_end_time + NETWORK_DELAY
+            # To compare Centralized scheduler with Ideal Parrot, ignore the network delay back to the scheduler
+            # Since it is a constant delay, it will not affect the response time pattern.
+            scheduler_notify_time = task_end_time
             task_end_events.append((scheduler_notify_time, TaskEndEvent(self)))
 
             job_complete = job.task_completed(task_end_time)
@@ -185,7 +187,7 @@ class Simulation(object):
 
 def main():
     #logging.basicConfig(level=logging.INFO)
-    sim = Simulation(10000, "centralized", 0.90, TaskDistributions.CONSTANT)
+    sim = Simulation(10000, "centralized", 0.95, TaskDistributions.CONSTANT)
     sim.run()
 
 if __name__ == "__main__":

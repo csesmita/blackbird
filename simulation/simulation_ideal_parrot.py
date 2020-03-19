@@ -24,7 +24,7 @@ import random
 from util import Job, TaskDistributions
 
 #All times simulated are in milliseconds
-MEDIAN_TASK_DURATION = 80000
+MEDIAN_TASK_DURATION = 8
 NETWORK_DELAY = 0.5
 TASKS_PER_JOB = 30
 SLOTS_PER_WORKER = 2
@@ -85,7 +85,7 @@ class JobArrival(Event):
         #print "Job %s arrived at %s at worker %s" % (job.id, current_time, self.worker_index)
         new_events = self.simulation.send_tasks(job, current_time)
 
-        """
+
         # Add new Job Arrival event, for the next job to arrive after this one.
         arrival_delay = random.expovariate(1.0 / self.interarrival_delay)
         worker_index = random.choice(self.simulation.worker_indices)
@@ -99,7 +99,7 @@ class JobArrival(Event):
                            JobArrival.event_count/JobArrival.NUM_STATIC_ARRIVALS*JobArrival.job_arrival[JobArrival.NUM_STATIC_ARRIVALS - 1]
             new_events.append((arrival_time, self))
         # Use this block to compare against fixed arrival times
-
+        """
         return new_events
 
 class TaskArrival(Event):
@@ -161,6 +161,7 @@ class Worker(object):
         get_task_events = self.add_task(current_time)
         return get_task_events
 
+    # Add the future queue here since the scheduler nodes are already aware of this future allocation
     def queue_length(self):
         if self.free_slots > 0:
             assert self.queued_tasks.empty()
@@ -261,7 +262,7 @@ class Simulation(object):
         return response_times
 
 def main():
-    sim = Simulation(10000, "parrot", 0.90, TaskDistributions.CONSTANT)
+    sim = Simulation(10000, "parrot", 0.95, TaskDistributions.CONSTANT)
     sim.run()
 
 if __name__ == "__main__":
