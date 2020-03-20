@@ -25,12 +25,14 @@ import time
 
 from util import Job, TaskDistributions
 
-MEDIAN_TASK_DURATION = 8
+MEDIAN_TASK_DURATION = 80000
 NETWORK_DELAY = 0.5
 TASKS_PER_JOB = 30
 SLOTS_PER_WORKER = 2
 TOTAL_WORKERS = 500
 DAMPENING_FACTOR = 1 # No dampening
+INTERARRIVAL_RATE = 0.001
+SIMULATION_TIME = 1
 
 def get_percentile(N, percent, key=lambda x:x):
     if not N:
@@ -109,9 +111,10 @@ class TaskEndEvent():
         return self.simulation.free_slot(current_time)
 
 class Simulation(object):
-    def __init__(self, num_jobs, file_prefix, load, task_distribution):
+    def __init__(self, num_jobs, file_prefix, load, task_distribution, interarrival):
         avg_used_slots = load * SLOTS_PER_WORKER * TOTAL_WORKERS
-        self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)
+        #self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)
+        self.interarrival_delay = interarrival
         print ("Interarrival delay: %s (avg slots in use: %s)" %
                (self.interarrival_delay, avg_used_slots))
         self.jobs = {}
@@ -122,6 +125,7 @@ class Simulation(object):
         self.unscheduled_jobs = []
         self.file_prefix = file_prefix
         self.task_distribution = task_distribution
+        self.simulation_time = SIMULATION_TIME
 
     def schedule_tasks(self, job, current_time):
         self.jobs[job.id] = job
@@ -162,7 +166,7 @@ class Simulation(object):
         start_time = time.time()
         self.event_queue.put((0, JobArrival(self, self.interarrival_delay, self.task_distribution)))
         last_time = 0
-        while self.remaining_jobs > 0:
+        while last_time < self.simulation_time:
             current_time, event = self.event_queue.get()
             assert current_time >= last_time
             last_time = current_time
@@ -182,12 +186,12 @@ class Simulation(object):
 
         longest_tasks = [job.longest_task for job in complete_jobs]
         plot_cdf(longest_tasks, "%s_ideal_response_time.data" % self.file_prefix)
-        print "Simulation took", (now_time - start_time), "sec"
+        print "Total time  - ", (now_time - start_time), "sec"
         return response_times
 
 def main():
     #logging.basicConfig(level=logging.INFO)
-    sim = Simulation(10000, "centralized", 0.95, TaskDistributions.CONSTANT)
+    sim = Simulation(1000, "centralized", 0.95, TaskDistributions.CONSTANT, INTERARRIVAL_RATE)
     sim.run()
 
 if __name__ == "__main__":

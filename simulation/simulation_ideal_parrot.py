@@ -24,12 +24,14 @@ import random
 from util import Job, TaskDistributions
 
 #All times simulated are in milliseconds
-MEDIAN_TASK_DURATION = 8
+MEDIAN_TASK_DURATION = 80000
 NETWORK_DELAY = 0.5
 TASKS_PER_JOB = 30
 SLOTS_PER_WORKER = 2
 TOTAL_WORKERS = 500
 DAMPENING_FACTOR = 1
+INTERARRIVAL = 0.001
+SIMULATION_TIME = 1
 
 def get_percentile(N, percent, key=lambda x:x):
     if not N:
@@ -84,7 +86,6 @@ class JobArrival(Event):
                   (DAMPENING_FACTOR ** JobArrival.event_count) * MEDIAN_TASK_DURATION)
         #print "Job %s arrived at %s at worker %s" % (job.id, current_time, self.worker_index)
         new_events = self.simulation.send_tasks(job, current_time)
-
 
         # Add new Job Arrival event, for the next job to arrive after this one.
         arrival_delay = random.expovariate(1.0 / self.interarrival_delay)
@@ -183,9 +184,10 @@ class Worker(object):
         return []
 
 class Simulation(object):
-    def __init__(self, num_jobs, file_prefix, load, task_distribution):
+    def __init__(self, num_jobs, file_prefix, load, task_distribution, interarrival):
         avg_used_slots = load * SLOTS_PER_WORKER * TOTAL_WORKERS
-        self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)
+        #self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)*SLOTS_PER_WORKER * TOTAL_WORKERS
+        self.interarrival_delay = interarrival
         print ("Interarrival delay: %s (avg slots in use: %s)" %
                (self.interarrival_delay, avg_used_slots))
         self.jobs = {}
@@ -200,6 +202,8 @@ class Simulation(object):
         self.worker_indices = range(TOTAL_WORKERS)
         self.task_distribution = task_distribution
         self.unscheduled_jobs = []
+        self.unit_time = SIMULATION_TIME
+
 
     # Also acts a s splitter - Assigns tasks to the highly ranked node
     def send_tasks(self, job, current_time):
@@ -236,7 +240,8 @@ class Simulation(object):
         self.event_queue.put((0, JobArrival(self, self.interarrival_delay, self.task_distribution, worker_index)))
         last_time = 0
         iteration = 0
-        while self.remaining_jobs > 0:
+        #while self.remaining_jobs > 0:
+        while last_time < self.unit_time:
             current_time, event = self.event_queue.get()
             assert current_time >= last_time
             last_time = current_time
@@ -258,11 +263,11 @@ class Simulation(object):
             print "Average response time: ", numpy.mean(response_times)
             longest_tasks = [job.longest_task for job in complete_jobs]
             plot_cdf(longest_tasks, "%s_ideal_response_time.data" % self.file_prefix)
-        print "Simulation took", (now_time - start_time), "sec"
+        print "Total time - ", (now_time - start_time), "sec"
         return response_times
 
 def main():
-    sim = Simulation(10000, "parrot", 0.95, TaskDistributions.CONSTANT)
+    sim = Simulation(1000, "parrot", 0.95, TaskDistributions.CONSTANT, INTERARRIVAL)
     sim.run()
 
 if __name__ == "__main__":
