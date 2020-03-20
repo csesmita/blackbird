@@ -21,17 +21,20 @@ import numpy
 import Queue
 import time
 import random
+import threading
+
 from util import Job, TaskDistributions
 
 #All times simulated are in milliseconds
 MEDIAN_TASK_DURATION = 80000
 NETWORK_DELAY = 0.5
-TASKS_PER_JOB = 30
+TASKS_PER_JOB = 1
 SLOTS_PER_WORKER = 2
 TOTAL_WORKERS = 500
-DAMPENING_FACTOR = 1
+DAMPENING_FACTOR = 0.92
 INTERARRIVAL = 0.001
-SIMULATION_TIME = 1
+SIMULATION_TIME = 10
+IS_MUTITHREADED = False
 
 def get_percentile(N, percent, key=lambda x:x):
     if not N:
@@ -183,13 +186,14 @@ class Worker(object):
             return [(task_end_time, TaskEndEvent(self))]
         return []
 
-class Simulation(object):
+class Simulation(threading.Thread):
     def __init__(self, num_jobs, file_prefix, load, task_distribution, interarrival):
+        threading.Thread.__init__(self)
         avg_used_slots = load * SLOTS_PER_WORKER * TOTAL_WORKERS
-        #self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)*SLOTS_PER_WORKER * TOTAL_WORKERS
-        self.interarrival_delay = interarrival
-        print ("Interarrival delay: %s (avg slots in use: %s)" %
-               (self.interarrival_delay, avg_used_slots))
+        self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)*SLOTS_PER_WORKER * TOTAL_WORKERS
+        #self.interarrival_delay = interarrival
+        #print ("Interarrival delay: %s (avg slots in use: %s)" %
+        #       (self.interarrival_delay, avg_used_slots))
         self.jobs = {}
         self.remaining_jobs = num_jobs
         self.total_jobs = num_jobs
@@ -203,9 +207,10 @@ class Simulation(object):
         self.task_distribution = task_distribution
         self.unscheduled_jobs = []
         self.unit_time = SIMULATION_TIME
+        self.response_times = []
+        self.last_time = 0
 
-
-    # Also acts a s splitter - Assigns tasks to the highly ranked node
+    # Also acts as splitter - Assigns tasks to the highly ranked node
     def send_tasks(self, job, current_time):
         self.jobs[job.id] = job
         #random.shuffle(self.worker_indices)
@@ -235,13 +240,13 @@ class Simulation(object):
             self.remaining_jobs -= 1
 
     def run(self):
-        start_time = time.time()
+        #start_time = time.time()
         worker_index = random.choice(self.worker_indices)
         self.event_queue.put((0, JobArrival(self, self.interarrival_delay, self.task_distribution, worker_index)))
         last_time = 0
         iteration = 0
-        #while self.remaining_jobs > 0:
-        while last_time < self.unit_time:
+        while self.remaining_jobs > 0:
+        #while last_time < self.unit_time:
             current_time, event = self.event_queue.get()
             assert current_time >= last_time
             last_time = current_time
@@ -250,25 +255,61 @@ class Simulation(object):
             for new_event in new_events:
                 self.event_queue.put(new_event)
             iteration += 1
-
+        self.last_time = last_time
         now_time = time.time()
-        print ("Simulation ended after %s milliseconds (%s jobs started)" %
-           (last_time, len(self.jobs)))
-        complete_jobs = [j for j in self.jobs.values() if j.completed_tasks_count == j.num_tasks]
-        print "%s complete jobs" % len(complete_jobs)
-        response_times = [job.end_time - job.start_time for job in complete_jobs]
-        if len(response_times) > 0:
-            print "Included %s jobs" % len(response_times)
-            plot_cdf(response_times, "%s_response_times.data" % self.file_prefix)
-            print "Average response time: ", numpy.mean(response_times)
-            longest_tasks = [job.longest_task for job in complete_jobs]
-            plot_cdf(longest_tasks, "%s_ideal_response_time.data" % self.file_prefix)
-        print "Total time - ", (now_time - start_time), "sec"
-        return response_times
+        #print ("Simulation ended after %s milliseconds (%s jobs started)" %
+        #   (last_time, len(self.jobs)))
+        #complete_jobs = [j for j in self.jobs.values() if j.completed_tasks_count == j.num_tasks]
+        #print "%s complete jobs" % len(complete_jobs)
+        #self.response_times = [job.end_time - job.start_time for job in complete_jobs]
+        #if len(response_times) > 0:
+        #    print "Included %s jobs" % len(response_times)
+        #    plot_cdf(response_times, "%s_response_times.data" % self.file_prefix)
+        #    print "Average response time: ", numpy.mean(response_times)
+        #    longest_tasks = [job.longest_task for job in complete_jobs]
+        #    plot_cdf(longest_tasks, "%s_ideal_response_time.data" % self.file_prefix)
+        #print "Total time - ", (now_time - start_time), "sec"
+        #return self.response_times
 
 def main():
-    sim = Simulation(1000, "parrot", 0.95, TaskDistributions.CONSTANT, INTERARRIVAL)
-    sim.run()
+    num_simulations = 1
+    if IS_MUTITHREADED:
+        num_simulations = TOTAL_WORKERS * SLOTS_PER_WORKER
+    num_thread = 0
+    start_time = time.time()
+    sim_thread_list = []
+    while num_thread < num_simulations:
+        num_thread += 1
+        sim_thread = Simulation(10000, "parrot", 0.95, TaskDistributions.CONSTANT, INTERARRIVAL)
+        sim_thread_list.append(sim_thread)
+    for sim_thread in sim_thread_list:
+        sim_thread.start()
+    for sim_thread in sim_thread_list:
+        sim_thread.join()
+    max_last_time = 0
+    jobs_started = 0
+    num_completed_jobs = 0
+    response_times = []
+    for sim_thread in sim_thread_list:
+        if max_last_time < sim_thread.last_time:
+            max_last_time = sim_thread.last_time
+        jobs_started += len(sim_thread.jobs)
+        completed_jobs = [j for j in sim_thread.jobs.values() if j.completed_tasks_count == j.num_tasks]
+        num_completed_jobs += len(completed_jobs)
+        if len(completed_jobs) > 0:
+            response_times.append([job.end_time - job.start_time for job in completed_jobs])
+    now_time = time.time()
+    print ("Simulation ended after %s milliseconds (%s jobs started)" %
+          (max_last_time, jobs_started))
+    print "%s complete jobs" % len(completed_jobs)
+    if len(response_times) > 0:
+        print "Job Response Time - Included %s jobs" % len(response_times)
+    #    plot_cdf(response_times, "%s_response_times.data" % self.file_prefix)
+        print "Job Response Time - Average response time: ", numpy.mean(response_times)
+    #    longest_tasks = [job.longest_task for job in complete_jobs]
+    #    plot_cdf(longest_tasks, "%s_ideal_response_time.data" % self.file_prefix)
+    print "Total time - ", (now_time - start_time), "sec"
+
 
 if __name__ == "__main__":
     main()
