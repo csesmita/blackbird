@@ -26,15 +26,15 @@ import threading
 from util import Job, TaskDistributions
 
 #All times simulated are in milliseconds
-MEDIAN_TASK_DURATION = 80000
+MEDIAN_TASK_DURATION = 8
 NETWORK_DELAY = 0.5
 TASKS_PER_JOB = 1
 SLOTS_PER_WORKER = 2
-TOTAL_WORKERS = 500
-DAMPENING_FACTOR = 0.92
-INTERARRIVAL = 0.001
+TOTAL_WORKERS = 2
+DAMPENING_FACTOR = 1
+INTERARRIVAL = 0.01
 SIMULATION_TIME = 10
-IS_MUTITHREADED = False
+IS_MUTITHREADED = True
 
 def get_percentile(N, percent, key=lambda x:x):
     if not N:
@@ -190,8 +190,8 @@ class Simulation(threading.Thread):
     def __init__(self, num_jobs, file_prefix, load, task_distribution, interarrival):
         threading.Thread.__init__(self)
         avg_used_slots = load * SLOTS_PER_WORKER * TOTAL_WORKERS
-        self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)*SLOTS_PER_WORKER * TOTAL_WORKERS
-        #self.interarrival_delay = interarrival
+        #self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)*SLOTS_PER_WORKER * TOTAL_WORKERS
+        self.interarrival_delay = interarrival
         #print ("Interarrival delay: %s (avg slots in use: %s)" %
         #       (self.interarrival_delay, avg_used_slots))
         self.jobs = {}
@@ -280,7 +280,7 @@ def main():
     sim_thread_list = []
     while num_thread < num_simulations:
         num_thread += 1
-        sim_thread = Simulation(10000, "parrot", 0.95, TaskDistributions.CONSTANT, INTERARRIVAL)
+        sim_thread = Simulation(1000, "parrot", 0.95, TaskDistributions.CONSTANT, INTERARRIVAL)
         sim_thread_list.append(sim_thread)
     for sim_thread in sim_thread_list:
         sim_thread.start()
@@ -297,11 +297,11 @@ def main():
         completed_jobs = [j for j in sim_thread.jobs.values() if j.completed_tasks_count == j.num_tasks]
         num_completed_jobs += len(completed_jobs)
         if len(completed_jobs) > 0:
-            response_times.append([job.end_time - job.start_time for job in completed_jobs])
+            response_times = response_times + ([job.end_time - job.start_time for job in completed_jobs])
     now_time = time.time()
     print ("Simulation ended after %s milliseconds (%s jobs started)" %
           (max_last_time, jobs_started))
-    print "%s complete jobs" % len(completed_jobs)
+    print "%s complete jobs" % num_completed_jobs
     if len(response_times) > 0:
         print "Job Response Time - Included %s jobs" % len(response_times)
     #    plot_cdf(response_times, "%s_response_times.data" % self.file_prefix)

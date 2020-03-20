@@ -25,13 +25,13 @@ import time
 
 from util import Job, TaskDistributions
 
-MEDIAN_TASK_DURATION = 80000
+MEDIAN_TASK_DURATION = 8
 NETWORK_DELAY = 0.5
 TASKS_PER_JOB = 1
 SLOTS_PER_WORKER = 2
-TOTAL_WORKERS = 500
-DAMPENING_FACTOR = 0.92
-INTERARRIVAL_RATE = 0.001
+TOTAL_WORKERS = 2
+DAMPENING_FACTOR = 1
+INTERARRIVAL_RATE = 0.01
 SIMULATION_TIME = 10
 
 def get_percentile(N, percent, key=lambda x:x):
@@ -113,8 +113,8 @@ class TaskEndEvent():
 class Simulation(object):
     def __init__(self, num_jobs, file_prefix, load, task_distribution, interarrival):
         avg_used_slots = load * SLOTS_PER_WORKER * TOTAL_WORKERS
-        self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)
-        #self.interarrival_delay = interarrival
+        #self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)
+        self.interarrival_delay = interarrival
         print ("Interarrival delay: %s (avg slots in use: %s)" %
                (self.interarrival_delay, avg_used_slots))
         self.jobs = {}
@@ -194,7 +194,7 @@ class Simulation(object):
 
 def main():
     #logging.basicConfig(level=logging.INFO)
-    sim = Simulation(10000, "centralized", 0.95, TaskDistributions.CONSTANT, INTERARRIVAL_RATE)
+    sim = Simulation(1000, "centralized", 0.95, TaskDistributions.CONSTANT, INTERARRIVAL_RATE)
     sim.run()
 
 if __name__ == "__main__":
