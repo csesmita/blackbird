@@ -22,19 +22,20 @@ import Queue
 import time
 import random
 import threading
+import sys
 
 from util import Job, TaskDistributions
 
 #All times simulated are in milliseconds
-MEDIAN_TASK_DURATION = 8
+MEDIAN_TASK_DURATION = 10000
 NETWORK_DELAY = 0.5
-TASKS_PER_JOB = 1
+TASKS_PER_JOB = 10
 SLOTS_PER_WORKER = 2
-TOTAL_WORKERS = 2
-DAMPENING_FACTOR = 1
-INTERARRIVAL = 0.01
-SIMULATION_TIME = 10
+TOTAL_WORKERS = 10
+INTERARRIVAL = 1.0 * MEDIAN_TASK_DURATION/100
 IS_MUTITHREADED = True
+#DAMPENING_FACTOR = 1
+#SIMULATION_TIME = 1
 
 def get_percentile(N, percent, key=lambda x:x):
     if not N:
@@ -86,7 +87,8 @@ class JobArrival(Event):
     def run(self, current_time):
         JobArrival.event_count += 1
         job = Job(TASKS_PER_JOB, current_time, self.task_distribution,
-                  (DAMPENING_FACTOR ** JobArrival.event_count) * MEDIAN_TASK_DURATION)
+                  #(DAMPENING_FACTOR ** JobArrival.event_count) * MEDIAN_TASK_DURATION)
+                  (MEDIAN_TASK_DURATION))
         #print "Job %s arrived at %s at worker %s" % (job.id, current_time, self.worker_index)
         new_events = self.simulation.send_tasks(job, current_time)
 
@@ -206,7 +208,7 @@ class Simulation(threading.Thread):
         self.worker_indices = range(TOTAL_WORKERS)
         self.task_distribution = task_distribution
         self.unscheduled_jobs = []
-        self.unit_time = SIMULATION_TIME
+        #self.unit_time = SIMULATION_TIME
         self.response_times = []
         self.last_time = 0
 
@@ -272,15 +274,22 @@ class Simulation(threading.Thread):
         #return self.response_times
 
 def main():
+    if len(sys.argv) < 2:
+        print "Please provide the number of jobs to be run per scheduler"
+        sys.exit(0)
     num_simulations = 1
     if IS_MUTITHREADED:
         num_simulations = TOTAL_WORKERS * SLOTS_PER_WORKER
+    print "Parameters - MEDIAN_TASK_DURATION - ", MEDIAN_TASK_DURATION, \
+        "NETWORK_DELAY - ", NETWORK_DELAY, "TASKS_PER_JOB - ", TASKS_PER_JOB, "SLOTS_PER_WORKER - ", \
+        SLOTS_PER_WORKER, "TOTAL_WORKERS - ", TOTAL_WORKERS, "INTERARRIVAL_RATE - ", INTERARRIVAL, \
+        "Number of threads - ", num_simulations
     num_thread = 0
     start_time = time.time()
     sim_thread_list = []
     while num_thread < num_simulations:
         num_thread += 1
-        sim_thread = Simulation(1000, "parrot", 0.95, TaskDistributions.CONSTANT, INTERARRIVAL)
+        sim_thread = Simulation(int(sys.argv[1]), "parrot", 0.95, TaskDistributions.CONSTANT, INTERARRIVAL)
         sim_thread_list.append(sim_thread)
     for sim_thread in sim_thread_list:
         sim_thread.start()

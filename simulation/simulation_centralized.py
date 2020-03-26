@@ -22,17 +22,18 @@ import numpy
 import random
 import Queue
 import time
+import sys
 
 from util import Job, TaskDistributions
 
-MEDIAN_TASK_DURATION = 8
+MEDIAN_TASK_DURATION = 10000
 NETWORK_DELAY = 0.5
-TASKS_PER_JOB = 1
+TASKS_PER_JOB = 10
 SLOTS_PER_WORKER = 2
-TOTAL_WORKERS = 2
-DAMPENING_FACTOR = 1
-INTERARRIVAL_RATE = 0.01
-SIMULATION_TIME = 10
+TOTAL_WORKERS = 10
+INTERARRIVAL_RATE = 1.0 * MEDIAN_TASK_DURATION/100
+#SIMULATION_TIME = 1
+#DAMPENING_FACTOR = 1
 
 def get_percentile(N, percent, key=lambda x:x):
     if not N:
@@ -78,7 +79,8 @@ class JobArrival(Event):
     def run(self, current_time):
         JobArrival.event_count += 1
         job = Job(TASKS_PER_JOB, current_time, self.task_distribution,
-                  (DAMPENING_FACTOR ** JobArrival.event_count) * MEDIAN_TASK_DURATION)
+                  #(DAMPENING_FACTOR ** JobArrival.event_count) * MEDIAN_TASK_DURATION)
+                  (MEDIAN_TASK_DURATION))
         #if job.id == 0 or job.id == 1 or job.id == 2:
         #print "Job %s arrived at %s" % (job.id, current_time)
         # Schedule job.
@@ -115,8 +117,8 @@ class Simulation(object):
         avg_used_slots = load * SLOTS_PER_WORKER * TOTAL_WORKERS
         #self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)
         self.interarrival_delay = interarrival
-        print ("Interarrival delay: %s (avg slots in use: %s)" %
-               (self.interarrival_delay, avg_used_slots))
+        #print ("Interarrival delay: %s (avg slots in use: %s)" %
+        #       (self.interarrival_delay, avg_used_slots))
         self.jobs = {}
         self.remaining_jobs = num_jobs
         self.total_jobs = num_jobs
@@ -125,7 +127,7 @@ class Simulation(object):
         self.unscheduled_jobs = []
         self.file_prefix = file_prefix
         self.task_distribution = task_distribution
-        self.simulation_time = SIMULATION_TIME
+        #self.simulation_time = SIMULATION_TIME
 
     def schedule_tasks(self, job, current_time):
         self.jobs[job.id] = job
@@ -193,8 +195,14 @@ class Simulation(object):
         return response_times
 
 def main():
+    if len(sys.argv) < 2:
+        print "Please provide the number of jobs to be run per scheduler"
+        sys.exit(0)
     #logging.basicConfig(level=logging.INFO)
-    sim = Simulation(1000, "centralized", 0.95, TaskDistributions.CONSTANT, INTERARRIVAL_RATE)
+    print "Parameters - MEDIAN_TASK_DURATION - ", MEDIAN_TASK_DURATION, \
+        " NETWORK_DELAY - ", NETWORK_DELAY, "TASKS_PER_JOB - ", TASKS_PER_JOB, "SLOTS_PER_WORKER - ", \
+         SLOTS_PER_WORKER, "TOTAL_WORKERS - ", TOTAL_WORKERS, "INTERARRIVAL_RATE - ", INTERARRIVAL_RATE
+    sim = Simulation(int(sys.argv[1]), "centralized", 0.95, TaskDistributions.CONSTANT, INTERARRIVAL_RATE)
     sim.run()
 
 if __name__ == "__main__":
