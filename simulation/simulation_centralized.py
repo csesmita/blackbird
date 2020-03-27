@@ -148,7 +148,7 @@ class Simulation(object):
             #       (job.id, current_time + NETWORK_DELAY, task_duration, self.num_free_slots))
             task_end_time = current_time + task_duration + NETWORK_DELAY
             #scheduler_notify_time = task_end_time + NETWORK_DELAY
-            # To compare Centralized scheduler with Ideal Parrot, ignore the network delay back to the scheduler
+            # To compare Centralized scheduler with Ideal Blackbird, ignore the network delay back to the scheduler
             # Since it is a constant delay, it will not affect the response time pattern.
             scheduler_notify_time = task_end_time
             task_end_events.append((scheduler_notify_time, TaskEndEvent(self)))
