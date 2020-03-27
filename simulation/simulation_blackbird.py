@@ -215,7 +215,7 @@ class Simulation(object):
                              job.unscheduled_tasks[task_index], job.id)))
             task_workers[worker] = worker_queue_length + 1
             task_index += 1
-        return task_arrival_eventss
+        return task_arrival_events
 
     def add_task_completion_time(self, job_id, completion_time):
         job_complete = self.jobs[job_id].task_completed(completion_time)
