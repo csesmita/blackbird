@@ -190,7 +190,7 @@ class Simulation(object):
         task_arrival_events = []
         task_index = 0
         while task_index < len(job.unscheduled_tasks):
-        worker = sorted(self.workers, key=lambda worker: (worker.queue_length(worker_index, current_time)))[0]
+            worker = sorted(self.workers, key=lambda worker: (worker.queue_length(worker_index, current_time)))[0]
             #print "Assigning task %s to worker %s" % (task_index, worker.id)
             task_arrival_events.append(
                 (current_time + NETWORK_DELAY,
