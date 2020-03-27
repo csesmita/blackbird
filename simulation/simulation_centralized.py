@@ -26,14 +26,12 @@ import sys
 
 from util import Job, TaskDistributions
 
-MEDIAN_TASK_DURATION = 10000
+MEDIAN_TASK_DURATION = 1000000
 NETWORK_DELAY = 0.5
 TASKS_PER_JOB = 10
 SLOTS_PER_WORKER = 2
-TOTAL_WORKERS = 10
+TOTAL_WORKERS = 500
 INTERARRIVAL_RATE = 1.0 * MEDIAN_TASK_DURATION/100
-#SIMULATION_TIME = 1
-#DAMPENING_FACTOR = 1
 
 def get_percentile(N, percent, key=lambda x:x):
     if not N:
@@ -115,8 +113,8 @@ class TaskEndEvent():
 class Simulation(object):
     def __init__(self, num_jobs, file_prefix, load, task_distribution, interarrival):
         avg_used_slots = load * SLOTS_PER_WORKER * TOTAL_WORKERS
-        #self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)
-        self.interarrival_delay = interarrival
+        self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)
+        #self.interarrival_delay = interarrival
         #print ("Interarrival delay: %s (avg slots in use: %s)" %
         #       (self.interarrival_delay, avg_used_slots))
         self.jobs = {}
@@ -169,7 +167,6 @@ class Simulation(object):
         self.event_queue.put((0, JobArrival(self, self.interarrival_delay, self.task_distribution)))
         last_time = 0
         while self.remaining_jobs > 0:
-        #while last_time < self.simulation_time:
             current_time, event = self.event_queue.get()
             assert current_time >= last_time
             last_time = current_time
