@@ -66,22 +66,15 @@ class JobArrival(Event):
         job = Job(TASKS_PER_JOB, current_time, self.task_distribution,
                   MEDIAN_TASK_DURATION)
         #print "Job %s arrived at %s at worker %s" % (job.id, current_time, self.worker_index)
-        new_events = self.simulation.send_tasks(job, current_time, self.worker_index)
-
+        # Inform the scheduler node that a new job is now ready to be scheduled
+        new_events = self.simulation.send_task(job, current_time, self.worker_index)
         # Add new Job Arrival event, for the next job to arrive after this one.
+        new_events = []
         arrival_delay = random.expovariate(1.0 / self.interarrival_delay)
         worker_index = random.choice(self.simulation.worker_indices)
         new_events.append((current_time + arrival_delay,
                             JobArrival(self.simulation, self.interarrival_delay,
                                        self.task_distribution, worker_index)))
-        """
-        # Use this block to compare against fixed arrival times
-        if JobArrival.event_count < self.simulation.total_jobs:
-            arrival_time = JobArrival.job_arrival[JobArrival.event_count % JobArrival.NUM_STATIC_ARRIVALS] + \
-                           JobArrival.event_count/JobArrival.NUM_STATIC_ARRIVALS*JobArrival.job_arrival[JobArrival.NUM_STATIC_ARRIVALS - 1]
-            new_events.append((arrival_time, self))
-        # Use this block to compare against fixed arrival times
-        """
         return new_events
 
 class TaskArrival(Event):
@@ -149,14 +142,17 @@ class Worker(object):
     # This node sees other nodes' queue lengths only at (now + 2*NETWORK_DELAY)
     # NETWORK_DELAY to travel from scheduler node to that worker node,
     # and then NETWORK_DELAY for update to go from that worker node to all other scheduler nodes.
-    def queue_length(self, worker_index):
-        is_self = False
+    def queue_length(self, worker_index, current_time):
+        count_future_seen = 0
+        limit = current_time - 2 * NETWORK_DELAY
         if self.id == worker_index:
-            is_self = True
+            limit = current_time - NETWORK_DELAY
+        while(self.future_tasks.queue[count_future_seen][0] < limit) :
+            count_future_seen += 1
         if self.free_slots > 0:
             assert self.queued_tasks.empty()
-            return -self.free_slots + self.future_tasks.qsize()
-        return self.queued_tasks.qsize() + self.future_tasks.qsize()
+            return -self.free_slots + count_future_seen
+        return self.queued_tasks.qsize() + count_future_seen
 
     def maybe_start_task(self, current_time):
         if not self.queued_tasks.empty() and self.free_slots > 0:
@@ -172,24 +168,29 @@ class Worker(object):
             return [(task_end_time, TaskEndEvent(self))]
         return []
 
-# This class simulates the node functions in decentralized scheduler
-class DecentralizedSimulation(threading.Thread):
-    def __init__(self, simulation):
-        threading.Thread.__init__(self)
-        self.simulation = simulation
+# This class generates Job Arrivals
+class Simulation(object):
+    def __init__(self, num_jobs, load, task_distribution):
+        avg_used_slots = load * SLOTS_PER_WORKER * TOTAL_WORKERS
+        self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)
+        print ("Interarrival delay: %s (avg slots in use: %s)" %
+               (self.interarrival_delay, avg_used_slots))
+        self.jobs = {}
+        self.remaining_jobs = num_jobs
+        self.workers = []
+        while len(self.workers) < TOTAL_WORKERS:
+            self.workers.append(Worker(self, SLOTS_PER_WORKER, len(self.workers)))
+        self.worker_indices = range(TOTAL_WORKERS)
+        self.task_distribution = task_distribution
+        self.unscheduled_jobs = []
+        self.response_times = []
 
-    # Also acts as splitter - Assigns tasks to the highly ranked node
-    def send_tasks(self, job, current_time, worker_index):
-        self.simulation.lock.acquire()
-        self.simulation.jobs[job.id] = job
-        self.simulation.lock.release()
+    def send_task(self, job, current_time, worker_index):
         #print "Number of unscheduled tasks for job id ", job.id," is ", len(job.unscheduled_tasks)
         task_arrival_events = []
-        # for i, worker_index in enumerate(self.worker_indices[:len(job.unscheduled_tasks)]):
-        # Emit scheduling placement one task at a time
         task_index = 0
         while task_index < len(job.unscheduled_tasks):
-            worker = sorted(self.workers, key=lambda worker: (worker.queue_length(worker_index)))[0]
+        worker = sorted(self.workers, key=lambda worker: (worker.queue_length(worker_index, current_time)))[0]
             #print "Assigning task %s to worker %s" % (task_index, worker.id)
             task_arrival_events.append(
                 (current_time + NETWORK_DELAY,
@@ -203,107 +204,41 @@ class DecentralizedSimulation(threading.Thread):
         if job_complete:
             self.remaining_jobs -= 1
 
-    def run(self):
-        #start_time = time.time()
 
+    def run(self):
+        print "Parameters - MEDIAN_TASK_DURATION - ", MEDIAN_TASK_DURATION, \
+            "NETWORK_DELAY - ", NETWORK_DELAY, "TASKS_PER_JOB - ", TASKS_PER_JOB, "SLOTS_PER_WORKER - ", \
+            SLOTS_PER_WORKER, "TOTAL_WORKERS - ", TOTAL_WORKERS, "INTERARRIVAL_RATE - ", INTERARRIVAL
+        worker_index = random.choice(self.worker_indices)
+        self.event_queue.put((0,JobArrival(self, self.interarrival_delay, self.task_distribution, worker_index)))
+        start_time = time.time()
         last_time = 0
-        iteration = 0
         while self.remaining_jobs > 0:
             current_time, event = self.event_queue.get()
             assert current_time >= last_time
             last_time = current_time
             new_events = event.run(current_time)
-            #print "Iteration %d events - " % (iteration)
             for new_event in new_events:
                 self.event_queue.put(new_event)
-            iteration += 1
-        self.last_time = last_time
-        now_time = time.time()
-        #print ("Simulation ended after %s milliseconds (%s jobs started)" %
-        #   (last_time, len(self.jobs)))
-        #complete_jobs = [j for j in self.jobs.values() if j.completed_tasks_count == j.num_tasks]
-        #print "%s complete jobs" % len(complete_jobs)
-        #self.response_times = [job.end_time - job.start_time for job in complete_jobs]
-        #if len(response_times) > 0:
-        #    print "Included %s jobs" % len(response_times)
-        #    plot_cdf(response_times, "%s_response_times.data" % self.file_prefix)
-        #    print "Average response time: ", numpy.mean(response_times)
-        #    longest_tasks = [job.longest_task for job in complete_jobs]
-        #    plot_cdf(longest_tasks, "%s_ideal_response_time.data" % self.file_prefix)
-        #print "Total time - ", (now_time - start_time), "sec"
-        #return self.response_times
-
-# This class simulates the higher level System which starts off the decentralized scheduler
-class Simulation(object):
-    def __init__(self, num_jobs, file_prefix, load, task_distribution, interarrival):
-        threading.Thread.__init__(self)
-        avg_used_slots = load * SLOTS_PER_WORKER * TOTAL_WORKERS
-        self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)*SLOTS_PER_WORKER * TOTAL_WORKERS
-        #self.interarrival_delay = interarrival
-        print ("Interarrival delay: %s (avg slots in use: %s)" %
-               (self.interarrival_delay, avg_used_slots))
-        self.jobs = {}
-        self.remaining_jobs = num_jobs
-        self.total_jobs = num_jobs
-        self.job_queue = Queue.PriorityQueue()
-        self.workers = []
-        self.file_prefix = file_prefix
-        while len(self.workers) < TOTAL_WORKERS:
-            self.workers.append(Worker(self, SLOTS_PER_WORKER, len(self.workers)))
-        self.worker_indices = range(TOTAL_WORKERS)
-        self.task_distribution = task_distribution
-        self.unscheduled_jobs = []
-        self.response_times = []
-        self.last_time = 0
-        self.lock = threading.Lock()
-
-    def run(self):
-        num_simulations = 1
-        if IS_MUTITHREADED:
-            num_simulations = TOTAL_WORKERS * SLOTS_PER_WORKER
-        print "Parameters - MEDIAN_TASK_DURATION - ", MEDIAN_TASK_DURATION, \
-            "NETWORK_DELAY - ", NETWORK_DELAY, "TASKS_PER_JOB - ", TASKS_PER_JOB, "SLOTS_PER_WORKER - ", \
-            SLOTS_PER_WORKER, "TOTAL_WORKERS - ", TOTAL_WORKERS, "INTERARRIVAL_RATE - ", INTERARRIVAL, \
-            "Number of threads - ", num_simulations
-        num_thread = 0
-        start_time = time.time()
-        sim_thread_list = []
-        worker_index = random.choice(self.worker_indices)
-        self.job_queue.put((0, JobArrival(self, self.interarrival_delay, self.task_distribution, worker_index)))
-        while num_thread < num_simulations:
-            num_thread += 1
-            sim_thread = DecentralizedSimulation(self)
-            sim_thread_list.append(sim_thread)
-        for sim_thread in sim_thread_list:
-            sim_thread.start()
-        for sim_thread in sim_thread_list:
-            sim_thread.join()
-        max_last_time = 0
-        jobs_started = 0
-        num_completed_jobs = 0
-        response_times = []
-        for sim_thread in sim_thread_list:
-            if max_last_time < sim_thread.last_time:
-                max_last_time = sim_thread.last_time
-            jobs_started += len(sim_thread.jobs)
-            completed_jobs = [j for j in sim_thread.jobs.values() if j.completed_tasks_count == j.num_tasks]
-            num_completed_jobs += len(completed_jobs)
-            if len(completed_jobs) > 0:
-                response_times = response_times + ([job.end_time - job.start_time for job in completed_jobs])
         now_time = time.time()
         print ("Simulation ended after %s milliseconds (%s jobs started)" %
-               (max_last_time, jobs_started))
-        print "%s complete jobs" % num_completed_jobs
-        if len(response_times) > 0:
-            print "Job Response Time - Included %s jobs" % len(response_times)
-            print "Job Response Time - Average response time: ", numpy.mean(response_times)
-        print "Total time - ", (now_time - start_time), "sec"
+               (last_time, len(self.jobs)))
+        complete_jobs = [j for j in self.jobs.values() if j.completed_tasks_count == j.num_tasks]
+        print "%s complete jobs" % len(complete_jobs)
+        response_times = []
+        if len(complete_jobs) > 0:
+            response_times = [job.end_time - job.start_time for job in complete_jobs]
+            print "Included %s jobs" % len(response_times)
+            print "Average response time: ", numpy.mean(response_times)
+        print "Total time to run the code - ", (now_time - start_time), "sec"
+        return response_times
+
 
 def main():
     if len(sys.argv) < 2:
         print "Please provide the number of jobs to be run per scheduler"
         sys.exit(0)
-    sim = Simulation(int(sys.argv[1]), "blackbird", 0.95, TaskDistributions.CONSTANT, INTERARRIVAL)
+    sim = Simulation(int(sys.argv[1]), "blackbird", 0.95, TaskDistributions.CONSTANT)
     sim.run()
 
 
