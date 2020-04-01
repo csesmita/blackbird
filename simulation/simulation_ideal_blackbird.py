@@ -14,18 +14,19 @@
 # limitations under the License.
 #
 
-""" Simulates task placement decisions based on delayed view of other task placements. """
+""" Simulates task placement decisions based on ideal centralized view. """
 
+import math
 import numpy
 import Queue
 import time
 import random
 import sys
 import operator
-import math
 
 from util import Job, TaskDistributions
-MEDIAN_TASK_DURATION = 100000000
+
+MEDIAN_TASK_DURATION = 1
 NETWORK_DELAY = 0.5
 # IMPORTANT - Due to optimization of sort function, ensure tasks per job <= total number of workers
 TASKS_PER_JOB = 30
@@ -59,7 +60,6 @@ class JobArrival(Event):
         JobArrival.event_count += 1
         job = Job(TASKS_PER_JOB, current_time, self.task_distribution, MEDIAN_TASK_DURATION)
         #print "Job %s arrived at %s at worker %s" % (job.id, current_time, self.worker_index)
-        # Inform the scheduler node that a new job is now ready to be scheduled
         new_events = self.simulation.send_tasks(job, current_time, self.worker_index)
         # Add new Job Arrival event, for the next job to arrive after this one.
         arrival_delay = random.expovariate(1.0 / self.interarrival_delay)
@@ -136,15 +136,12 @@ class Worker(object):
         get_task_events = self.add_task(current_time)
         return get_task_events
 
-    # Add the future tasks here only if the task has been seen, i.e.
-    # This node sees its own scheduled tasks if current time >= their future time.
-    # This node sees other nodes' scheduled task if current time >= (their future time + NETWORK_DELAY)
-    # for update to go from that worker node to all other scheduler nodes.
-    def queue_length(self, worker_index, current_time):
+    # Add the future queue here since the scheduler nodes are already aware of this future allocation
+    def queue_length(self, current_time):
+        # Count tasks visible in future queue at this time
         count_future_seen = 0
-        limit = current_time
-        if self.id == worker_index:
-            limit = current_time - NETWORK_DELAY
+        #Since future time in queues already includes a network delay, account for that here
+        limit = current_time - NETWORK_DELAY
         while not self.future_tasks.empty():
             future_time, queue_details = self.future_tasks.get()
             if future_time > limit:
@@ -154,7 +151,6 @@ class Worker(object):
             count_future_seen += 1
         if self.free_slots > 0:
             return -self.free_slots + count_future_seen
-        # Update local copy of the resource table
         return self.queued_tasks.qsize() + count_future_seen
 
     def maybe_start_task(self, current_time):
@@ -173,9 +169,8 @@ class Worker(object):
             assert self.queued_tasks.empty()
         return []
 
-# This class generates Job Arrivals
 class Simulation(object):
-    def __init__(self, num_jobs, load, task_distribution, interarrival):
+    def __init__(self, num_jobs, file_prefix, load, task_distribution, interarrival):
         avg_used_slots = load * SLOTS_PER_WORKER * TOTAL_WORKERS
         self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)
         #self.interarrival_delay = interarrival
@@ -183,8 +178,11 @@ class Simulation(object):
                (self.interarrival_delay, avg_used_slots))
         self.jobs = {}
         self.remaining_jobs = num_jobs
+        self.total_jobs = num_jobs
         self.event_queue = Queue.PriorityQueue()
         self.workers = []
+        self.file_prefix = file_prefix
+        self.num_free_slots = TOTAL_WORKERS * SLOTS_PER_WORKER
         while len(self.workers) < TOTAL_WORKERS:
             self.workers.append(Worker(self, SLOTS_PER_WORKER, len(self.workers)))
         self.worker_indices = range(TOTAL_WORKERS)
@@ -198,14 +196,15 @@ class Simulation(object):
         self.jobs[job.id] = job
         #print "Number of unscheduled tasks for job id ", job.id," is ", len(job.unscheduled_tasks)
         task_arrival_events = []
+
         assert len(job.unscheduled_tasks) <= len(self.workers)
         # Sort just once and store a local copy to work with
         sorted_workers = sorted(self.workers,
-                                key=lambda worker:(worker.queue_length(worker_index, current_time)))[0:len(job.unscheduled_tasks)]
+                                key=lambda worker:(worker.queue_length(current_time)))[0:len(job.unscheduled_tasks)]
         # Calculate present queue lengths for these workers and take note.
         task_workers = {}
         for worker in sorted_workers:
-            task_workers[worker] = worker.queue_length(worker_index, current_time)
+            task_workers[worker] = worker.queue_length(current_time)
         # Schedule tasks
         task_index = 0
         while task_index < len(job.unscheduled_tasks):
@@ -216,6 +215,16 @@ class Simulation(object):
                              job.unscheduled_tasks[task_index], job.id)))
             task_workers[worker] = worker_queue_length + 1
             task_index += 1
+        """
+        task_index = 0
+        while task_index < len(job.unscheduled_tasks):
+            worker = sorted(self.workers, key=lambda worker:(worker.queue_length(current_time)))[0]
+            task_arrival_events.append(
+                (current_time + NETWORK_DELAY,
+                 TaskArrival(current_time + NETWORK_DELAY, self.workers[worker.id],
+                             job.unscheduled_tasks[task_index], job.id)))
+            task_index += 1
+        """
         return task_arrival_events
 
     def add_task_completion_time(self, job_id, completion_time):
@@ -223,44 +232,44 @@ class Simulation(object):
         if job_complete:
             self.remaining_jobs -= 1
 
-
     def run(self):
-        worker_index = random.choice(self.worker_indices)
-        self.event_queue.put((0,JobArrival(self, self.interarrival_delay, self.task_distribution, worker_index)))
         start_time = time.time()
+        worker_index = random.choice(self.worker_indices)
+        self.event_queue.put((0, JobArrival(self, self.interarrival_delay, self.task_distribution, worker_index)))
         last_time = 0
+        iteration = 0
         while self.remaining_jobs > 0:
             current_time, event = self.event_queue.get()
             assert current_time >= last_time
             last_time = current_time
             new_events = event.run(current_time)
+            #print "Iteration %d events - " % (iteration)
             for new_event in new_events:
                 self.event_queue.put(new_event)
+            iteration += 1
+
         now_time = time.time()
         print ("Simulation ended after %s milliseconds (%s jobs started)" %
-               (last_time, len(self.jobs)))
+           (last_time, len(self.jobs)))
         complete_jobs = [j for j in self.jobs.values() if j.completed_tasks_count == j.num_tasks]
         print "%s complete jobs" % len(complete_jobs)
-        response_times = []
         if len(complete_jobs) > 0:
             response_times = [job.end_time - job.start_time for job in complete_jobs]
             print "Included %s jobs" % len(response_times)
-            print "Average response time: ", numpy.mean(response_times) , "ms (", \
+            print "Average response time: ", numpy.mean(response_times), "ms (", \
                 (numpy.mean(response_times))/1000,"s)"
-        print "Total time to run the code - ", (now_time - start_time), "sec"
+        print "Total time - ", (now_time - start_time), "sec"
         return response_times
-
 
 def main():
     if len(sys.argv) < 2:
         print "Please provide the number of jobs to be run by the scheduler"
         sys.exit(0)
     print "Parameters - MEDIAN_TASK_DURATION - ", MEDIAN_TASK_DURATION, \
-        "NETWORK_DELAY - ", NETWORK_DELAY, "TASKS_PER_JOB - ", TASKS_PER_JOB, "SLOTS_PER_WORKER - ", \
+        " NETWORK_DELAY - ", NETWORK_DELAY, "TASKS_PER_JOB - ", TASKS_PER_JOB, "SLOTS_PER_WORKER - ", \
         SLOTS_PER_WORKER, "TOTAL_WORKERS - ", TOTAL_WORKERS, "INTERARRIVAL_RATE - ", INTERARRIVAL_RATE
-    sim = Simulation(int(sys.argv[1]), 0.95, TaskDistributions.CONSTANT, INTERARRIVAL_RATE)
+    sim = Simulation(int(sys.argv[1]), "blackbird", 0.90, TaskDistributions.CONSTANT, INTERARRIVAL_RATE)
     sim.run()
-
 
 if __name__ == "__main__":
     main()

@@ -44,8 +44,8 @@ class Job(object):
         self.scheduler = scheduler
         self.to_print = False
         self.probed_workers = set()
-        if self.id == 10 or self.id == 100 or self.id == 1000 or self.id == 10000:
-            self.to_print = False
+        if self.id == 1500:
+            self.to_print = True
         if self.to_print:
             print "Job ", self.id,"started at time", self.start_time
 
@@ -58,13 +58,14 @@ class Job(object):
             self.time_all_tasks_scheduled = current_time
 
     def task_completed(self, completion_time):
-        #print"Job id ", self.id,"current end_time", self.end_time, " gets a completed task at time ", completion_time
+        #if self.to_print:
+            #print"Job id ", self.id,"current end_time", self.end_time, "gets a completed task at time ", completion_time
         """ Returns true if the job has completed, and false otherwise. """
         self.completed_tasks_count += 1
         self.end_time = max(completion_time, self.end_time)
         assert self.completed_tasks_count <= self.num_tasks
         if self.num_tasks == self.completed_tasks_count and self.to_print:
-            print"Job id ", self.id,"is completed at time ", self.end_time
+            print"Job id ", self.id,"is completed at time ", self.end_time, " duration - ", self.end_time - self.start_time
         return self.num_tasks == self.completed_tasks_count
 
     def exponentially_distributed_tasks(self, median_task_duration):
@@ -81,5 +82,3 @@ class Job(object):
     def constant_distributed_tasks(self, median_task_duration):
         while len(self.unscheduled_tasks) < self.num_tasks:
             self.unscheduled_tasks.append(median_task_duration)
-            #if self.id == 0 or self.id == 1:
-            #    print "Task duration is ", median_task_duration

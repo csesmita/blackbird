@@ -26,10 +26,10 @@ import sys
 
 from util import Job, TaskDistributions
 
-MEDIAN_TASK_DURATION = 1000000
+MEDIAN_TASK_DURATION = 100000000
 NETWORK_DELAY = 0.5
-TASKS_PER_JOB = 10
-SLOTS_PER_WORKER = 2
+TASKS_PER_JOB = 30
+SLOTS_PER_WORKER = 1
 TOTAL_WORKERS = 500
 INTERARRIVAL_RATE = 1.0 * MEDIAN_TASK_DURATION/100
 
@@ -76,11 +76,7 @@ class JobArrival(Event):
 
     def run(self, current_time):
         JobArrival.event_count += 1
-        job = Job(TASKS_PER_JOB, current_time, self.task_distribution,
-                  #(DAMPENING_FACTOR ** JobArrival.event_count) * MEDIAN_TASK_DURATION)
-                  (MEDIAN_TASK_DURATION))
-        #if job.id == 0 or job.id == 1 or job.id == 2:
-        #print "Job %s arrived at %s" % (job.id, current_time)
+        job = Job(TASKS_PER_JOB, current_time, self.task_distribution, MEDIAN_TASK_DURATION)
         # Schedule job.
         new_events = self.simulation.schedule_tasks(job, current_time)
 
@@ -88,15 +84,19 @@ class JobArrival(Event):
         # Add new Job Arrival event, for the next job to arrive after this one.
         arrival_delay = random.expovariate(1.0 / self.interarrival_delay)
         new_events.append((current_time + arrival_delay, self))
+        if job.id == 1500:
+            print "Arrival delay at job", job.id," is ", arrival_delay, " interarrival delay is ", self.interarrival_delay
         # Use this block to generate random job arrivals
 
         #print "Returning %s events" % len(new_events)
         """
-        # Use this block to compare against fixed arrival times
+        # Use this block to compare against fixed arrival times for debugging and correctness checks
         if JobArrival.event_count < self.simulation.total_jobs:
             arrival_time = JobArrival.job_arrival[JobArrival.event_count % JobArrival.NUM_STATIC_ARRIVALS] + \
                            JobArrival.event_count/JobArrival.NUM_STATIC_ARRIVALS*JobArrival.job_arrival[JobArrival.NUM_STATIC_ARRIVALS - 1]
             new_events.append((arrival_time, self))
+            if job.id == 1500:
+                print "Arrival time at job", job.id," is ", arrival_time, " interarrival delay is ", self.interarrival_delay
         # Use this block to compare against fixed arrival times
         """
         return new_events
@@ -115,8 +115,8 @@ class Simulation(object):
         avg_used_slots = load * SLOTS_PER_WORKER * TOTAL_WORKERS
         self.interarrival_delay = (1.0 * MEDIAN_TASK_DURATION * TASKS_PER_JOB / avg_used_slots)
         #self.interarrival_delay = interarrival
-        #print ("Interarrival delay: %s (avg slots in use: %s)" %
-        #       (self.interarrival_delay, avg_used_slots))
+        print ("Interarrival delay: %s (avg slots in use: %s)" %
+               (self.interarrival_delay, avg_used_slots))
         self.jobs = {}
         self.remaining_jobs = num_jobs
         self.total_jobs = num_jobs
@@ -125,7 +125,6 @@ class Simulation(object):
         self.unscheduled_jobs = []
         self.file_prefix = file_prefix
         self.task_distribution = task_distribution
-        #self.simulation_time = SIMULATION_TIME
 
     def schedule_tasks(self, job, current_time):
         self.jobs[job.id] = job
@@ -145,9 +144,11 @@ class Simulation(object):
             #print ("Launching task for job %s at %s (duration %s); %s remaining slots" %
             #       (job.id, current_time + NETWORK_DELAY, task_duration, self.num_free_slots))
             task_end_time = current_time + task_duration + NETWORK_DELAY
-            #scheduler_notify_time = task_end_time + NETWORK_DELAY
-            # To compare Centralized scheduler with Ideal Blackbird, ignore the network delay back to the scheduler
-            # Since it is a constant delay, it will not affect the response time pattern.
+            scheduler_notify_time = task_end_time + NETWORK_DELAY
+            # To compare Centralized scheduler with Ideal Blackbird, perhaps ignore the network
+            # delay back to the scheduler?
+            # Since it is a constant delay, it will not affect the response time pattern. However,
+            # this might be show up as substantial difference when comparing with Ideal Blackbird
             scheduler_notify_time = task_end_time
             task_end_events.append((scheduler_notify_time, TaskEndEvent(self)))
 
@@ -184,22 +185,20 @@ class Simulation(object):
             response_times = [job.end_time - job.start_time for job in complete_jobs]
             print "Included %s jobs" % len(response_times)
             plot_cdf(response_times, "%s_response_times.data" % self.file_prefix)
-            print "Average response time: ", numpy.mean(response_times)
-
-            longest_tasks = [job.longest_task for job in complete_jobs]
-            plot_cdf(longest_tasks, "%s_ideal_response_time.data" % self.file_prefix)
+            print "Average response time: ", numpy.mean(response_times), "ms (", \
+                (numpy.mean(response_times))/1000,"s)"
         print "Total time  - ", (now_time - start_time), "sec"
         return response_times
 
 def main():
     if len(sys.argv) < 2:
-        print "Please provide the number of jobs to be run per scheduler"
+        print "Please provide the number of jobs to be run by the scheduler"
         sys.exit(0)
     #logging.basicConfig(level=logging.INFO)
     print "Parameters - MEDIAN_TASK_DURATION - ", MEDIAN_TASK_DURATION, \
         " NETWORK_DELAY - ", NETWORK_DELAY, "TASKS_PER_JOB - ", TASKS_PER_JOB, "SLOTS_PER_WORKER - ", \
          SLOTS_PER_WORKER, "TOTAL_WORKERS - ", TOTAL_WORKERS, "INTERARRIVAL_RATE - ", INTERARRIVAL_RATE
-    sim = Simulation(int(sys.argv[1]), "centralized", 0.95, TaskDistributions.CONSTANT, INTERARRIVAL_RATE)
+    sim = Simulation(int(sys.argv[1]), "centralized", 0.90, TaskDistributions.CONSTANT, INTERARRIVAL_RATE)
     sim.run()
 
 if __name__ == "__main__":
