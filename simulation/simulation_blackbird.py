@@ -30,7 +30,9 @@ NETWORK_DELAY = 0.5
 # IMPORTANT - Due to optimization of sort function, ensure tasks per job <= total number of workers
 TASKS_PER_JOB = 30
 SLOTS_PER_WORKER = 4
-TOTAL_WORKERS = 1000
+NUM_DIRECTLY_CONNECTED_NEIGHBORS = 7
+MAX_NUM_HOPS = 4
+TOTAL_WORKERS = NUM_DIRECTLY_CONNECTED_NEIGHBORS ** MAX_NUM_HOPS # = 2401
 INTERARRIVAL_RATE = 1.0 * MEDIAN_TASK_DURATION / 100
 
 class Event(object):
@@ -140,11 +142,13 @@ class Worker(object):
     # This node sees its own scheduled tasks if current time >= their future time.
     # This node sees other nodes' scheduled task if current time >= (their future time + NETWORK_DELAY)
     # for update to go from that worker node to all other scheduler nodes.
-    def queue_length(self, worker_index, current_time):
+    def queue_length(self, worker_index, current_time, hop):
         count_future_seen = 0
-        limit = current_time
+        limit = 0
         if self.id == worker_index:
-            limit = current_time - NETWORK_DELAY
+            limit = current_time
+        else:
+            limit = current_time - hop * NETWORK_DELAY
         while not self.future_tasks.empty():
             future_time, queue_details = self.future_tasks.get()
             if future_time > limit:
@@ -191,6 +195,11 @@ class Simulation(object):
         self.task_distribution = task_distribution
         self.unscheduled_jobs = []
 
+    # Returns an array denoting distance of workers from an arbitary worker node
+    def get_hops(self, count):
+        node_array = numpy.logspace(1, MAX_NUM_HOPS, num=count, endpoint=True, base=NUM_DIRECTLY_CONNECTED_NEIGHBORS)
+        return [int(math.ceil(math.log(node, NUM_DIRECTLY_CONNECTED_NEIGHBORS))) for node in node_array]
+
     # Contains optimization to sort workers just once
     # TODO - Support case when number of tasks / job > total number of workers?
     # TODO - Use priority queues here to avoid sorting
@@ -199,13 +208,15 @@ class Simulation(object):
         #print "Number of unscheduled tasks for job id ", job.id," is ", len(job.unscheduled_tasks)
         task_arrival_events = []
         assert len(job.unscheduled_tasks) <= len(self.workers)
+        hops = self.get_hops(TOTAL_WORKERS)
+        hops = random.sample(hops, TOTAL_WORKERS)
         # Sort just once and store a local copy to work with
         sorted_workers = sorted(self.workers,
-                                key=lambda worker:(worker.queue_length(worker_index, current_time)))[0:len(job.unscheduled_tasks)]
+                                key=lambda worker:(worker.queue_length(worker_index, current_time, hops[worker.id])))[0:len(job.unscheduled_tasks)]
         # Calculate present queue lengths for these workers and take note.
         task_workers = {}
         for worker in sorted_workers:
-            task_workers[worker] = worker.queue_length(worker_index, current_time)
+            task_workers[worker] = worker.queue_length(worker_index, current_time, hops[worker.id])
         # Schedule tasks
         task_index = 0
         while task_index < len(job.unscheduled_tasks):

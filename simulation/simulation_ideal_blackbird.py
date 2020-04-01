@@ -141,7 +141,7 @@ class Worker(object):
         # Count tasks visible in future queue at this time
         count_future_seen = 0
         #Since future time in queues already includes a network delay, account for that here
-        limit = current_time - NETWORK_DELAY
+        limit = current_time
         while not self.future_tasks.empty():
             future_time, queue_details = self.future_tasks.get()
             if future_time > limit:
@@ -196,7 +196,6 @@ class Simulation(object):
         self.jobs[job.id] = job
         #print "Number of unscheduled tasks for job id ", job.id," is ", len(job.unscheduled_tasks)
         task_arrival_events = []
-
         assert len(job.unscheduled_tasks) <= len(self.workers)
         # Sort just once and store a local copy to work with
         sorted_workers = sorted(self.workers,
