@@ -1,0 +1,27 @@
+#!/bin/bash
+echo "--------Starting Blackbird!-----------"
+NUM_JOBS=100
+rm -rf real_blackbird.txt
+for ((i=0;i<=10;i++))
+do
+  python simulation_blackbird.py $NUM_JOBS
+  NUM_JOBS=`expr $NUM_JOBS \* 2`
+done 2>&1 | tee real_blackbird.txt
+
+echo "--------Starting Ideal Blackbird!-----------"
+NUM_JOBS=100
+rm -rf ideal_blackbird.txt
+for ((i=0;i<=10;i++))
+do
+  python simulation_ideal_blackbird.py $NUM_JOBS
+  NUM_JOBS=`expr $NUM_JOBS \* 2`
+done 2>&1 | tee ideal_blackbird.txt
+
+echo "--------Starting Centralized!-----------"
+NUM_JOBS=100
+rm -rf centralized.txt
+for ((i=0;i<=10;i++))
+do
+  python simulation_centralized.py $NUM_JOBS
+  NUM_JOBS=`expr $NUM_JOBS \* 2`
+done 2>&1 | tee centralized.txt

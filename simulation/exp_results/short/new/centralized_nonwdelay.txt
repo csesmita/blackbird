@@ -1,0 +1,84 @@
+Parameters - MEDIAN_TASK_DURATION -  1  NETWORK_DELAY -  0 TASKS_PER_JOB -  30 SLOTS_PER_WORKER -  4 TOTAL_WORKERS -  2401 INTERARRIVAL_RATE -  0.01
+Interarrival delay: 0.00347077606553 (avg slots in use: 8643.6)
+Simulation ended after 0.309300951201 milliseconds (100 jobs started)
+100 complete jobs
+Included 100 jobs
+Average response time:  1.0 ms ( 0.001 s)
+Total time  -  0.0225389003754 sec
+Parameters - MEDIAN_TASK_DURATION -  1  NETWORK_DELAY -  0 TASKS_PER_JOB -  30 SLOTS_PER_WORKER -  4 TOTAL_WORKERS -  2401 INTERARRIVAL_RATE -  0.01
+Interarrival delay: 0.00347077606553 (avg slots in use: 8643.6)
+Simulation ended after 0.706611606551 milliseconds (200 jobs started)
+200 complete jobs
+Included 200 jobs
+Average response time:  1.0 ms ( 0.001 s)
+Total time  -  0.0455088615417 sec
+Parameters - MEDIAN_TASK_DURATION -  1  NETWORK_DELAY -  0 TASKS_PER_JOB -  30 SLOTS_PER_WORKER -  4 TOTAL_WORKERS -  2401 INTERARRIVAL_RATE -  0.01
+Interarrival delay: 0.00347077606553 (avg slots in use: 8643.6)
+Simulation ended after 1.41559016544 milliseconds (400 jobs started)
+400 complete jobs
+Included 400 jobs
+Average response time:  1.0 ms ( 0.001 s)
+Total time  -  0.159927129745 sec
+Parameters - MEDIAN_TASK_DURATION -  1  NETWORK_DELAY -  0 TASKS_PER_JOB -  30 SLOTS_PER_WORKER -  4 TOTAL_WORKERS -  2401 INTERARRIVAL_RATE -  0.01
+Interarrival delay: 0.00347077606553 (avg slots in use: 8643.6)
+Simulation ended after 2.71380341935 milliseconds (800 jobs started)
+800 complete jobs
+Included 800 jobs
+Average response time:  1.00001624254 ms ( 0.00100001624254 s)
+Total time  -  0.453217029572 sec
+Parameters - MEDIAN_TASK_DURATION -  1  NETWORK_DELAY -  0 TASKS_PER_JOB -  30 SLOTS_PER_WORKER -  4 TOTAL_WORKERS -  2401 INTERARRIVAL_RATE -  0.01
+Interarrival delay: 0.00347077606553 (avg slots in use: 8643.6)
+Arrival delay at job 1500  is  0.00263319900721  interarrival delay is  0.00347077606553
+Simulation ended after 5.42523246519 milliseconds (1600 jobs started)
+1600 complete jobs
+Included 1600 jobs
+Average response time:  1.00027790511 ms ( 0.00100027790511 s)
+Total time  -  1.11563491821 sec
+Parameters - MEDIAN_TASK_DURATION -  1  NETWORK_DELAY -  0 TASKS_PER_JOB -  30 SLOTS_PER_WORKER -  4 TOTAL_WORKERS -  2401 INTERARRIVAL_RATE -  0.01
+Interarrival delay: 0.00347077606553 (avg slots in use: 8643.6)
+Arrival delay at job 1500  is  0.000511607964749  interarrival delay is  0.00347077606553
+Simulation ended after 11.0825296825 milliseconds (3200 jobs started)
+3200 complete jobs
+Included 3200 jobs
+Average response time:  1.00020706349 ms ( 0.00100020706349 s)
+Total time  -  2.42536497116 sec
+Parameters - MEDIAN_TASK_DURATION -  1  NETWORK_DELAY -  0 TASKS_PER_JOB -  30 SLOTS_PER_WORKER -  4 TOTAL_WORKERS -  2401 INTERARRIVAL_RATE -  0.01
+Interarrival delay: 0.00347077606553 (avg slots in use: 8643.6)
+Arrival delay at job 1500  is  0.00628072664957  interarrival delay is  0.00347077606553
+Simulation ended after 22.3489992573 milliseconds (6400 jobs started)
+6400 complete jobs
+Included 6400 jobs
+Average response time:  1.0004765757 ms ( 0.0010004765757 s)
+Total time  -  4.95984911919 sec
+Parameters - MEDIAN_TASK_DURATION -  1  NETWORK_DELAY -  0 TASKS_PER_JOB -  30 SLOTS_PER_WORKER -  4 TOTAL_WORKERS -  2401 INTERARRIVAL_RATE -  0.01
+Interarrival delay: 0.00347077606553 (avg slots in use: 8643.6)
+Arrival delay at job 1500  is  0.00462106159984  interarrival delay is  0.00347077606553
+Simulation ended after 44.2442418581 milliseconds (12800 jobs started)
+12800 complete jobs
+Included 12800 jobs
+Average response time:  1.0001931235 ms ( 0.0010001931235 s)
+Total time  -  10.3551979065 sec
+Parameters - MEDIAN_TASK_DURATION -  1  NETWORK_DELAY -  0 TASKS_PER_JOB -  30 SLOTS_PER_WORKER -  4 TOTAL_WORKERS -  2401 INTERARRIVAL_RATE -  0.01
+Interarrival delay: 0.00347077606553 (avg slots in use: 8643.6)
+Arrival delay at job 1500  is  0.0115755721884  interarrival delay is  0.00347077606553
+Simulation ended after 88.8395457795 milliseconds (25600 jobs started)
+25600 complete jobs
+Included 25600 jobs
+Average response time:  1.00030258196 ms ( 0.00100030258196 s)
+Total time  -  20.5130980015 sec
+Parameters - MEDIAN_TASK_DURATION -  1  NETWORK_DELAY -  0 TASKS_PER_JOB -  30 SLOTS_PER_WORKER -  4 TOTAL_WORKERS -  2401 INTERARRIVAL_RATE -  0.01
+Interarrival delay: 0.00347077606553 (avg slots in use: 8643.6)
+Arrival delay at job 1500  is  0.00160888872323  interarrival delay is  0.00347077606553
+Simulation ended after 177.714661422 milliseconds (51200 jobs started)
+51200 complete jobs
+Included 51200 jobs
+Average response time:  1.00107975757 ms ( 0.00100107975757 s)
+Total time  -  44.0313529968 sec
+Parameters - MEDIAN_TASK_DURATION -  1  NETWORK_DELAY -  0 TASKS_PER_JOB -  30 SLOTS_PER_WORKER -  4 TOTAL_WORKERS -  2401 INTERARRIVAL_RATE -  0.01
+Interarrival delay: 0.00347077606553 (avg slots in use: 8643.6)
+Arrival delay at job 1500  is  0.00193191585072  interarrival delay is  0.00347077606553
+Simulation ended after 354.972522922 milliseconds (102403 jobs started)
+102400 complete jobs
+Included 102400 jobs
+Average response time:  1.00091769499 ms ( 0.00100091769499 s)
+Total time  -  83.5027370453 sec
