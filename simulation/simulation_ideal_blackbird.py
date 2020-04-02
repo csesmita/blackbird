@@ -26,12 +26,12 @@ import operator
 
 from util import Job, TaskDistributions
 
-MEDIAN_TASK_DURATION = 1
+MEDIAN_TASK_DURATION = 100000000
 NETWORK_DELAY = 0.5
 # IMPORTANT - Due to optimization of sort function, ensure tasks per job <= total number of workers
 TASKS_PER_JOB = 30
 SLOTS_PER_WORKER = 4
-TOTAL_WORKERS = 1000
+TOTAL_WORKERS = 2401
 INTERARRIVAL_RATE = 1.0 * MEDIAN_TASK_DURATION / 100
 
 class Event(object):
@@ -141,7 +141,7 @@ class Worker(object):
         # Count tasks visible in future queue at this time
         count_future_seen = 0
         #Since future time in queues already includes a network delay, account for that here
-        limit = current_time
+        limit = current_time + NETWORK_DELAY
         while not self.future_tasks.empty():
             future_time, queue_details = self.future_tasks.get()
             if future_time > limit:

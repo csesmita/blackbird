@@ -144,11 +144,9 @@ class Worker(object):
     # for update to go from that worker node to all other scheduler nodes.
     def queue_length(self, worker_index, current_time, hop):
         count_future_seen = 0
-        limit = 0
         if self.id == worker_index:
-            limit = current_time
-        else:
-            limit = current_time - hop * NETWORK_DELAY
+            hop = 0
+        limit = current_time - hop * NETWORK_DELAY
         while not self.future_tasks.empty():
             future_time, queue_details = self.future_tasks.get()
             if future_time > limit:
@@ -269,7 +267,7 @@ def main():
     print "Parameters - MEDIAN_TASK_DURATION - ", MEDIAN_TASK_DURATION, \
         "NETWORK_DELAY - ", NETWORK_DELAY, "TASKS_PER_JOB - ", TASKS_PER_JOB, "SLOTS_PER_WORKER - ", \
         SLOTS_PER_WORKER, "TOTAL_WORKERS - ", TOTAL_WORKERS, "INTERARRIVAL_RATE - ", INTERARRIVAL_RATE
-    sim = Simulation(int(sys.argv[1]), 0.95, TaskDistributions.CONSTANT, INTERARRIVAL_RATE)
+    sim = Simulation(int(sys.argv[1]), 0.90, TaskDistributions.CONSTANT, INTERARRIVAL_RATE)
     sim.run()
 
 
