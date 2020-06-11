@@ -1,5 +1,5 @@
-Blackbird simulator
+Murmuration simulator
 ====================
 
-Initial commits to develop Blackbird scheduler. This is a decentralized scheduler. 
+Initial commits to develop Murmuration scheduler. This is a decentralized scheduler. 
 Work in progress.
