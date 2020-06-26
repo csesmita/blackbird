@@ -14,6 +14,7 @@ import Queue
 import bitmap
 import copy
 import collections
+import os
 
 class TaskDurationDistributions:
     CONSTANT, MEAN, FROM_FILE  = range(3)
@@ -1208,6 +1209,9 @@ print "Simulation ended in ", (time.time() - t1), " s "
 finished_file.close()
 load_file.close()
 
+# Generate CDF data
+os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "short" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
+os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "long" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
 
 print >> stats_file, "STATS_SH_PROBES_ASSIGNED_IN_BP:      ",    stats.STATS_SH_PROBES_ASSIGNED_IN_BP
 print >> stats_file, "STATS_SH_PROBES_QUEUED_BEHIND_BIG:      ",    stats.STATS_SH_PROBES_QUEUED_BEHIND_BIG 
