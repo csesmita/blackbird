@@ -141,13 +141,13 @@ class Event(object):
 #####################################################################################################################
 
 class JobArrival(Event, file):
-    '''
+    #'''
     # The following static definitions are used in debugging.
     # Compare job response times and job arrivals across various designs.
     event_count = 0
     job_arrival = [0.0, 0.90, 1.55, 1.876, 2.50, 3.4, 6.0, 7.88, 9.88, 10.5]
     NUM_STATIC_ARRIVALS = 10
-    '''
+    #'''
     def __init__(self, simulation, task_distribution, job, jobs_file):
         self.simulation = simulation
         self.task_distribution = task_distribution
@@ -220,18 +220,20 @@ class JobArrival(Event, file):
         if (line == ''):
             self.simulation.scheduled_last_job = True
             return new_events
-
-        self.job = Job(self.task_distribution, line, self.job.estimate_distribution, self.job.off_mean_bottom, self.job.off_mean_top)
-        new_events.append((self.job.start_time, self))
-        self.simulation.jobs_scheduled += 1
-        """
+        #self.job = Job(self.task_distribution, line, self.job.estimate_distribution, self.job.off_mean_bottom, self.job.off_mean_top)
+        #new_events.append((self.job.start_time, self))
+        #"""
         # For debugging - Use this block to compare against fixed arrival times
-        if JobArrival.event_count < self.simulation.total_jobs:
-            arrival_time = JobArrival.job_arrival[JobArrival.event_count % JobArrival.NUM_STATIC_ARRIVALS] + \
+        if JobArrival.event_count < JobArrival.NUM_STATIC_ARRIVALS:
+            arrival_time = 7.527 + JobArrival.job_arrival[JobArrival.event_count % JobArrival.NUM_STATIC_ARRIVALS] + \
                            JobArrival.event_count/JobArrival.NUM_STATIC_ARRIVALS*JobArrival.job_arrival[JobArrival.NUM_STATIC_ARRIVALS - 1]
             new_events.append((arrival_time, self))
+            JobArrival.event_count += 1
+            if JobArrival.event_count == JobArrival.NUM_STATIC_ARRIVALS:
+                self.simulation.scheduled_last_job = True
         # Use this block to compare against fixed arrival times
-        """
+        #"""
+        self.simulation.jobs_scheduled += 1
         return new_events
 
 
@@ -1367,8 +1369,8 @@ finished_file.close()
 load_file.close()
 
 # Generate CDF data
-os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "short" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
-os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "long" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
+#os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "short" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
+#os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "long" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
 
 print >> stats_file, "STATS_SH_PROBES_ASSIGNED_IN_BP:      ",    stats.STATS_SH_PROBES_ASSIGNED_IN_BP
 print >> stats_file, "STATS_SH_PROBES_QUEUED_BEHIND_BIG:      ",    stats.STATS_SH_PROBES_QUEUED_BEHIND_BIG 
