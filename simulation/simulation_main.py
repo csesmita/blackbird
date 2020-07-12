@@ -462,13 +462,13 @@ class Worker(object):
                     # Queue details is (task_length, job.id)
                     task_duration = queue_details[0]
                     job_id = queue_details[1]
-                    self.queued_probes.append([job_id, task_duration, (self.executing_big == True or self.queued_big > 0), 0, False, -1])
+                    self.queued_probes.append([job_id, task_duration, (self.executing_big == True or self.queued_big > 0), 0, False, -1, future_time])
                     #print "Task for job %s will be processed at worker %s at time %f" % (queue_details[1], self.id, current_time)
                 else:
                     self.future_probes.put((future_time, queue_details))
                     break
         else:
-            self.queued_probes.append([job_id,task_length,(self.executing_big == True or self.queued_big > 0), 0, False,-1])
+            self.queued_probes.append([job_id,task_length,(self.executing_big == True or self.queued_big > 0), 0, False,-1, current_time])
 
         # Now, tasks are ready to maybe start
         if (long_job):
@@ -498,28 +498,34 @@ class Worker(object):
         return []
 
 
+    # Worker class
     # Add the future tasks here only if the task has been seen, i.e.
     # This node sees its own scheduled tasks if current time >= their future time.
     # This node sees other nodes' scheduled task if current time >= (their future time + NETWORK_DELAY)
     # for update to go from that worker node to all other scheduler nodes.
-    def queue_length(self, worker_index, current_time, hop):
-        count_future_seen = 0
-        if self.id == worker_index:
+    def queue_length(self, scheduler_index, current_time, hop):
+        worker_estimated_time = 0
+        if self.id == scheduler_index:
             hop = 0
         limit = current_time - hop * NETWORK_DELAY
+        # Calculate what part of the current queue can be seen at the scheduler
+        for index in range(len(self.queued_probes)):
+           estimated_task_arrival = self.queued_probes[index][6]
+           if (estimated_task_arrival > limit):
+               break
+           estimated_task_duration = self.queued_probes[index][1]
+           worker_estimated_time += estimated_task_duration
         while not self.future_probes.empty():
             future_time, queue_details = self.future_probes.get()
             if future_time > limit:
                 self.future_probes.put((future_time, queue_details))
                 break
-            self.queued_probes.put((queue_details[0], queue_details[1]))
-            count_future_seen += 1
-        if len(self.free_slots) > 0:
-            return count_future_seen - len(self.free_slots)
+            job_id = queue_details[1]
+            task_duration = queue_details[0]
+            self.queued_probes.append([job_id, task_duration, (self.executing_big == True or self.queued_big > 0), 0, False, -1, future_time])
+            worker_estimated_time += task_duration
         # Update local copy of the resource table
-        return len(self.queued_probes) + count_future_seen
-
-
+        return worker_estimated_time
 
     #Worker class
     def ask_probes(self, current_time):
@@ -1178,6 +1184,9 @@ class Simulation(object):
             # Do this just once to simulate the resource table and store a local copy to work with
             # Ranking policy used - Least loaded node
             # Take the first N least loaded workers, where N is number of tasks for this iteration.
+            ########################################################################################
+            # For all tasks of this job, try to assign as many tasks to a worker node as possible.
+            ########################################################################################
             maximum_workers_needed_in_iteration = tasks_left_to_place if tasks_left_to_place <= len(self.workers) else len(self.workers) 
             sorted_workers = sorted(self.workers,
                                     key=lambda worker:(worker.queue_length(scheduler_index, current_time, hops[worker.id])))[0:maximum_workers_needed_in_iteration]
@@ -1193,7 +1202,7 @@ class Simulation(object):
                 task_arrival_events.append((task_arrival_time,
                      ProbeEvent(task_arrival_time, self.workers[worker.id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
                 # Update the local copy of queue lengths
-                task_workers[worker] = worker_queue_length + 1
+                task_workers[worker] = worker_queue_length + job.estimated_task_duration
                 task_index += 1
             tasks_left_to_place -= maximum_workers_needed_in_iteration
             if tasks_left_to_place <= 0:
