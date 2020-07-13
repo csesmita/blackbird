@@ -5,6 +5,10 @@
 #
 # Modified from EAGLE - Operating Systems Laboratory EPFL
 
+'''
+Either during next pop the future time is not taken into consideration, 
+or the sorting does  not take into account the actual task end time.
+'''
 import sys
 import time
 import logging
@@ -395,6 +399,7 @@ class TaskEndEvent():
             
 
         self.worker.tstamp_start_crt_big_task =- 1
+        print "Current time (TTE)", current_time
         return self.worker.free_slot(current_time)
 
 
@@ -408,8 +413,10 @@ class Worker(object):
 
         # List of times when slots were freed, for each free slot (used to track the time the worker spends idle).
         self.free_slots = []
+        self.slots_occupied_until = []
         while len(self.free_slots) < num_slots:
             self.free_slots.append(0)
+            self.slots_occupied_until.append(0)
 
         self.queued_big = 0
         self.queued_probes = []
@@ -441,7 +448,6 @@ class Worker(object):
     #Worker class
     def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap, handle_stealing):
         global stats
-
         long_job = job_type_for_scheduling == BIG
         if (not long_job and handle_stealing == False and (self.executing_big == True or self.queued_big > 0)):
             stats.STATS_SH_PROBES_QUEUED_BEHIND_BIG += 1        
@@ -465,7 +471,7 @@ class Worker(object):
                     task_duration = queue_details[0]
                     job_id = queue_details[1]
                     self.queued_probes.append([job_id, task_duration, (self.executing_big == True or self.queued_big > 0), 0, False, -1, future_time])
-                    #print "Task for job %s will be processed at worker %s at time %f" % (queue_details[1], self.id, current_time)
+                    #print "Task for job %s will be processed at worker %s at time %f" % (queue_details[1], self.id, future_time)
                 else:
                     self.future_probes.put((future_time, queue_details))
                     break
@@ -488,6 +494,7 @@ class Worker(object):
     #Worker class
     def free_slot(self, current_time):
         self.free_slots.append(current_time)
+        self.slots_occupied_until.pop()
         self.simulation.increase_free_slots_for_load_tracking(self)
         self.executing_big = False
 
@@ -507,9 +514,14 @@ class Worker(object):
     # for update to go from that worker node to all other scheduler nodes.
     def queue_length(self, scheduler_index, current_time, hop):
         worker_estimated_time = 0
+        printme = False
+        if self.id == 1:
+            printme = True
         if self.id == scheduler_index:
             hop = 0
         limit = current_time - hop * NETWORK_DELAY
+        if printme:
+            print "Queued probes of worker "
         # Calculate what part of the current queue can be seen at the scheduler
         for index in range(len(self.queued_probes)):
            estimated_task_arrival = self.queued_probes[index][6]
@@ -526,6 +538,10 @@ class Worker(object):
             task_duration = queue_details[0]
             self.queued_probes.append([job_id, task_duration, (self.executing_big == True or self.queued_big > 0), 0, False, -1, future_time])
             worker_estimated_time += task_duration
+        i = 0
+        while i < len(self.slots_occupied_until):
+            worker_estimated_time += self.slots_occupied_until[i]
+            i += 1
         # Update local copy of the resource table
         return worker_estimated_time
 
@@ -656,6 +672,8 @@ class Worker(object):
 
         job_id = self.queued_probes[pos][0]
         estimated_task_duration = self.queued_probes[pos][1]
+        self.slots_occupied_until.append(current_time + estimated_task_duration)
+        print "Slots occupied until ", self.slots_occupied_until
 
         self.executing_big = self.simulation.jobs[job_id].job_type_for_scheduling == BIG
         if self.executing_big:
@@ -1191,11 +1209,15 @@ class Simulation(object):
             ########################################################################################
             maximum_workers_needed_in_iteration = tasks_left_to_place if tasks_left_to_place <= len(self.workers) else len(self.workers) 
             sorted_workers = sorted(self.workers,
-                                    key=lambda worker:(worker.queue_length(scheduler_index, current_time, hops[worker.id])))[0:maximum_workers_needed_in_iteration]
+                                    key=lambda worker:(worker.queue_length(scheduler_index, current_time, hops[worker.id])))
+            #sorted_workers = sorted(self.workers,
+            #                        key=lambda worker:(worker.queue_length(scheduler_index, current_time, hops[worker.id])))[0:maximum_workers_needed_in_iteration]
             # Calculate present queue lengths for these workers and take note.
             task_workers = {}
             for worker in sorted_workers:
                 task_workers[worker] = worker.queue_length(scheduler_index, current_time, hops[worker.id])
+            print "Task worker ", sorted_workers[0].id," queue length at time", current_time," is ", task_workers[sorted_workers[0]]    
+            print "Task worker ", sorted_workers[1].id, " queue length  at time", current_time," is ", task_workers[sorted_workers[1]]    
             # Schedule tasks
             task_index = 0
             while task_index < maximum_workers_needed_in_iteration:
