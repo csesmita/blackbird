@@ -5,10 +5,6 @@
 #
 # Modified from EAGLE - Operating Systems Laboratory EPFL
 
-'''
-Either during next pop the future time is not taken into consideration, 
-or the sorting does  not take into account the actual task end time.
-'''
 import sys
 import time
 import logging
@@ -145,13 +141,6 @@ class Event(object):
 #####################################################################################################################
 
 class JobArrival(Event, file):
-    #'''
-    # The following static definitions are used in debugging.
-    # Compare job response times and job arrivals across various designs.
-    event_count = 0
-    job_arrival = [0.0, 0.90, 1.55, 1.876, 2.50, 3.4, 6.0, 7.88, 9.88, 10.5]
-    NUM_STATIC_ARRIVALS = 10
-    #'''
     def __init__(self, simulation, task_distribution, job, jobs_file):
         self.simulation = simulation
         self.task_distribution = task_distribution
@@ -224,19 +213,8 @@ class JobArrival(Event, file):
         if (line == ''):
             self.simulation.scheduled_last_job = True
             return new_events
-        #self.job = Job(self.task_distribution, line, self.job.estimate_distribution, self.job.off_mean_bottom, self.job.off_mean_top)
-        #new_events.append((self.job.start_time, self))
-        #"""
-        # For debugging - Use this block to compare against fixed arrival times
-        if JobArrival.event_count < JobArrival.NUM_STATIC_ARRIVALS:
-            arrival_time = 7.527 + JobArrival.job_arrival[JobArrival.event_count % JobArrival.NUM_STATIC_ARRIVALS] + \
-                           JobArrival.event_count/JobArrival.NUM_STATIC_ARRIVALS*JobArrival.job_arrival[JobArrival.NUM_STATIC_ARRIVALS - 1]
-            new_events.append((arrival_time, self))
-            JobArrival.event_count += 1
-            if JobArrival.event_count == JobArrival.NUM_STATIC_ARRIVALS:
-                self.simulation.scheduled_last_job = True
-        # Use this block to compare against fixed arrival times
-        #"""
+        self.job = Job(self.task_distribution, line, self.job.estimate_distribution, self.job.off_mean_bottom, self.job.off_mean_top)
+        new_events.append((self.job.start_time, self))
         self.simulation.jobs_scheduled += 1
         return new_events
 
@@ -307,20 +285,32 @@ class ProbeEvent(Event):
 
 #####################################################################################################################
 #####################################################################################################################
-# ClusterStatusKeeper: Keeps track of tasks assigned to workers and the
-# estimated start time. This is so that different hops can "see" different 
-# lengths of worker queues.
+# ClusterStatusKeeper: Keeps track of tasks assigned to workers and the 
+# estimated start time of each task. This is so that different hops can "see" 
+# different lengths of worker queues.
+# TODO - Does this also include currently executing task at the worker?
 class ClusterStatusKeeper():
+    INDEX_OF_START_TIME = 0
+    INDEX_OF_TASK_DURATION = 1
     def __init__(self):
-        # tasks_estimated_time denotes the estimated time for tasks to start at worker nodes.
+        # worker_queues is a key value pair of worker indices and queued tasks.
+        # Queued tasks are array entries that each contain (start_time, task_duration)
+        # Data Structure of worker_queues - 
+        # <Worker Index> : [[t0_start_time, t0_task_duration], [...], [t_last_start_time, t_last_task_duration]]
+        # Queue estimated time = t_last_start_time + t_last_task_duration
         self.worker_queues = {}
         self.btmap = bitmap.BitMap(TOTAL_WORKERS)
         for i in range(0, TOTAL_WORKERS):
-           self.worker_queues[i] = 0
+           self.worker_queues[i] = []
 
     # ClusterStatusKeeper class
     def get_queue_status(self):
         return self.worker_queues
+
+    # ClusterStatusKeeper class
+    def get_workers_queue_status(self, worker_index):
+        qlen = len(self.workers_queues[worker_index])
+        return self.workers_queues[worker_index][qlen - 1][INDEX_OF_START_TIME] + workers_queue_status[worker_index][qlen - 1][INDEX_OF_TASK_DURATION]
 
     # ClusterStatusKeeper class
     def get_btmap(self):
@@ -333,17 +323,28 @@ class ClusterStatusKeeper():
     # for update to go from that worker node to all other scheduler nodes.
     def update_workers_queue(self, worker_indices, increase, duration):
         for worker in worker_indices:
-            queue = self.worker_queues[worker]
+            # tasks is of the form -  [[10, 20], [20, 30], ...]
+            tasks = self.worker_queues[worker]
             if increase:
-                queue += duration
+                # Calculate the estimated start time of the new incoming task
+                currently_last_task = tasks[len(tasks) - 1]
+                start_time_new_task = tasks[currently_last_task][INDEX_OF_START_TIME] + tasks[currently_last_task][INDEX_OF_TASK_DURATION]
+                # Append (start_time, task_duration) to the end of tasks list
+                tasks.append([start_time_new_task, duration])
                 self.btmap.set(worker) 
             else:
-                queue -= duration
-                if(queue == 0):
+                # Search for the first entry with this task_duration and pop the task
+                original_task_queue_length = len(tasks)
+                task_index = 0
+                while task_index < original_task_queue_length:
+                    if tasks[task_index][INDEX_OF_TASK_DURATION] == duration:
+                        # Delete this task entry and finish
+                        tasks.pop(task_index)
+                        break
+                    task_index += 1
+                assert task_index < original_task_queue_length, (" offending value for task_duration: %r %i " % (task_duration,worker))
+                if(len(tasks) == 0):
                     self.btmap.flip(worker) 
-            assert queue >= 0, (" offending value for queue: %r %i " % (queue,worker))
-            self.worker_queues[worker] = queue
-
 
 
 #####################################################################################################################
@@ -399,7 +400,6 @@ class TaskEndEvent():
             
 
         self.worker.tstamp_start_crt_big_task =- 1
-        print "Current time (TTE)", current_time
         return self.worker.free_slot(current_time)
 
 
@@ -514,14 +514,9 @@ class Worker(object):
     # for update to go from that worker node to all other scheduler nodes.
     def queue_length(self, scheduler_index, current_time, hop):
         worker_estimated_time = 0
-        printme = False
-        if self.id == 1:
-            printme = True
         if self.id == scheduler_index:
             hop = 0
         limit = current_time - hop * NETWORK_DELAY
-        if printme:
-            print "Queued probes of worker "
         # Calculate what part of the current queue can be seen at the scheduler
         for index in range(len(self.queued_probes)):
            estimated_task_arrival = self.queued_probes[index][6]
@@ -673,7 +668,6 @@ class Worker(object):
         job_id = self.queued_probes[pos][0]
         estimated_task_duration = self.queued_probes[pos][1]
         self.slots_occupied_until.append(current_time + estimated_task_duration)
-        print "Slots occupied until ", self.slots_occupied_until
 
         self.executing_big = self.simulation.jobs[job_id].job_type_for_scheduling == BIG
         if self.executing_big:
@@ -954,7 +948,7 @@ class Simulation(object):
 
         empty_nodes = []  #performance optimization
         for index in hash_workers_considered:
-            qlen          = workers_queue_status[index]                
+            qlen          = ClusterStatusKeeper.get_workers_queue_status(index)
             worker_obj    = simulation.workers[index]
             worker_id     = index
 
@@ -1006,7 +1000,7 @@ class Simulation(object):
         prio_queue = Queue.PriorityQueue()
 
         for index in hash_workers_considered:
-            qlen          = workers_queue_status[index]                
+            qlen          = ClusterStatusKeeper.get_workers_queue_status(index)
             worker_obj    = simulation.workers[index]
 
             adjusted_waiting_time = qlen
@@ -1208,16 +1202,16 @@ class Simulation(object):
             # For all tasks of this job, try to assign as many tasks to a worker node as possible.
             ########################################################################################
             maximum_workers_needed_in_iteration = tasks_left_to_place if tasks_left_to_place <= len(self.workers) else len(self.workers) 
-            sorted_workers = sorted(self.workers,
-                                    key=lambda worker:(worker.queue_length(scheduler_index, current_time, hops[worker.id])))
             #sorted_workers = sorted(self.workers,
-            #                        key=lambda worker:(worker.queue_length(scheduler_index, current_time, hops[worker.id])))[0:maximum_workers_needed_in_iteration]
+            #                        key=lambda worker:(worker.queue_length(scheduler_index, current_time, hops[worker.id])))
+            sorted_workers = sorted(self.workers,
+                                    key=lambda worker:(worker.queue_length(scheduler_index, current_time, hops[worker.id])))[0:maximum_workers_needed_in_iteration]
             # Calculate present queue lengths for these workers and take note.
             task_workers = {}
             for worker in sorted_workers:
                 task_workers[worker] = worker.queue_length(scheduler_index, current_time, hops[worker.id])
-            print "Task worker ", sorted_workers[0].id," queue length at time", current_time," is ", task_workers[sorted_workers[0]]    
-            print "Task worker ", sorted_workers[1].id, " queue length  at time", current_time," is ", task_workers[sorted_workers[1]]    
+            #print "Task worker ", sorted_workers[0].id," queue length at time", current_time," is ", task_workers[sorted_workers[0]]    
+            #print "Task worker ", sorted_workers[1].id, " queue length  at time", current_time," is ", task_workers[sorted_workers[1]]    
             # Schedule tasks
             task_index = 0
             while task_index < maximum_workers_needed_in_iteration:
@@ -1266,7 +1260,7 @@ class Simulation(object):
         events = []
         task_duration = job.unscheduled_tasks.pop()
         task_completion_time = task_duration + get_task_response_time
-        print current_time, " worker:", worker.id, " task from job ", job_id, " task duration: ", task_duration, " will finish at time ", task_completion_time
+        #print current_time, " worker:", worker.id, " task from job ", job_id, " task duration: ", task_duration, " will finish at time ", task_completion_time
         is_job_complete = job.update_task_completion_details(task_completion_time)
 
         if is_job_complete:
@@ -1391,8 +1385,8 @@ finished_file.close()
 load_file.close()
 
 # Generate CDF data
-#os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "short" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
-#os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "long" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
+os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "short" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
+os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "long" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
 
 print >> stats_file, "STATS_SH_PROBES_ASSIGNED_IN_BP:      ",    stats.STATS_SH_PROBES_ASSIGNED_IN_BP
 print >> stats_file, "STATS_SH_PROBES_QUEUED_BEHIND_BIG:      ",    stats.STATS_SH_PROBES_QUEUED_BEHIND_BIG 

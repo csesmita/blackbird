@@ -47,6 +47,10 @@ for line in infile:
 infile.close()
 
 jobrunningtime.sort()
+#print jobrunningtime
+#print np.percentile(jobrunningtime, 50)
+#print np.percentile(jobrunningtime, 90)
+#print np.percentile(jobrunningtime, 99)
 outfile.write("%s\t%s\n"% ("Cluster Size ", sys.argv[5]))
 outfile.write("%s\t%s\n"% ("50th percentile: ",  np.percentile(jobrunningtime, 50))) 
 outfile.write("%s\t%s\n" % ("90th percentile: ", np.percentile(jobrunningtime, 90))) 
