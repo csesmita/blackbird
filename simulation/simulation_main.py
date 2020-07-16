@@ -364,14 +364,6 @@ class ClusterStatusKeeper():
             task_index += 1
         return worker_estimated_time
 
-    def print_worker_queue_status(self, worker_index):
-        print " Arrival times for worker ", worker_index
-        task_index = 0
-        while task_index < len(self.worker_queues[worker_index]):
-            print self.worker_queues[worker_index][task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME]
-            task_index += 1
-
-
 #####################################################################################################################
 #####################################################################################################################
 
@@ -1168,27 +1160,18 @@ class Simulation(object):
             task_workers = {}
             for worker in sorted_workers:
                 task_workers[worker] = self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, hops[worker.id])
+
             #### TESTING - Ensure if there are any non_long job workers, they are always ahead in the sorted list
+            # If there are nodes not running long jobs, they better show up here.
+            # This assert may have a genuine reason to fail - when the bit has been flipped after TaskEndEvent
+            # occuring between now and propagation delay to that node.
             '''
             non_long_job_workers = []
             btmap = self.cluster_status_keeper.get_btmap()
             for worker in sorted_workers:
                 if not btmap.test(worker.id):
                     non_long_job_workers.append(worker)
-            if len(non_long_job_workers) > 0:
-                non_long_job_workers_collection = collections.Counter(non_long_job_workers)
-                sorted_workers_collection = collections.Counter(sorted_workers[0:len(non_long_job_workers)])
-                if non_long_job_workers_collection != sorted_workers_collection:
-                    print "Non long job workers includes ", non_long_job_workers_collection - sorted_workers_collection
-                    print "Sorted workers includes ", sorted_workers_collection - non_long_job_workers_collection
-                    print "Length of Non long job workers ", len(non_long_job_workers)
-                    print "Length of sorted workers ", len(sorted_workers)
-                    print "Current time ", current_time
-                    for worker in non_long_job_workers_collection - sorted_workers_collection:
-                        self.cluster_status_keeper.print_worker_queue_status(worker.id)
-                    for worker in sorted_workers_collection - non_long_job_workers_collection:
-                        self.cluster_status_keeper.print_worker_queue_status(worker.id)
-                assert (collections.Counter(non_long_job_workers) == collections.Counter(sorted_workers[0:len(non_long_job_workers)]))
+            assert set(non_long_job_workers) - set(sorted_workers) == set()
             '''
             #### TESTING
 
