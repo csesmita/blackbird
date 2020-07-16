@@ -276,9 +276,6 @@ class ProbeEvent(Event):
         self.task_length = task_length
         self.job_type_for_scheduling = job_type_for_scheduling
         self.btmap = btmap
-        # TODO - Needed? This is required to ensure correct calculation of queue lengths
-        if SYSTEM_SIMULATED == "Murmuration":
-            self.worker.enqueue_future_probes(task_arrival_time, task_length, job_id)
 
     def run(self, current_time):
         return self.worker.add_probe(self.job_id, self.task_length, self.job_type_for_scheduling, current_time,self.btmap, False)
@@ -330,6 +327,7 @@ class ClusterStatusKeeper():
         for worker in worker_indices:
             # tasks is of the form -  [[10, 20, 1], [20, 20, 1], ...]
             tasks = self.worker_queues[worker]
+
             if increase:
                 # Append (arrival_time_at_worker, task_duration) to the end of tasks list
                 tasks.append([arrival_time_at_worker, duration, job_id])
@@ -365,6 +363,13 @@ class ClusterStatusKeeper():
                 worker_estimated_time += self.worker_queues[worker_index][task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION]
             task_index += 1
         return worker_estimated_time
+
+    def print_worker_queue_status(self, worker_index):
+        print " Arrival times for worker ", worker_index
+        task_index = 0
+        while task_index < len(self.worker_queues[worker_index]):
+            print self.worker_queues[worker_index][task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME]
+            task_index += 1
 
 
 #####################################################################################################################
@@ -441,7 +446,6 @@ class Worker(object):
         self.queued_big = 0
         self.queued_probes = []
         # Some tasks have to be accounted for before they surface on the worker node
-        self.future_probes = Queue.PriorityQueue()
         self.id = id
         self.executing_big = False
 
@@ -460,12 +464,6 @@ class Worker(object):
         self.btmap_tstamp = -1
 
     #Worker class
-    def enqueue_future_probes(self, future_time, task_duration, job_id):
-        #print "Enqueuing future Task for job %s at worker %s for future time %s" % (job_id, self.id, future_time)
-        self.future_probes.put((future_time, [task_duration, job_id]))
-        #print "Future tasks queue is as follows - ", self.future_probes.queue
-
-    #Worker class
     def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap, handle_stealing):
         global stats
         long_job = job_type_for_scheduling == BIG
@@ -475,28 +473,7 @@ class Worker(object):
         if (not long_job and handle_stealing == False and  self.in_big):        
             stats.STATS_SH_PROBES_ASSIGNED_IN_BP +=1
 
-        if SYSTEM_SIMULATED == "Murmuration":
-            # Add tasks from future queue for Murmuration
-            #print "Future tasks queue is as follows - ", self.future_probes.queue
-            last_future_time = 0
-            while(not self.future_probes.empty()):
-                future_time, queue_details = self.future_probes.get()
-                assert last_future_time <= future_time
-                last_future_time = future_time
-                if future_time <= current_time:
-                    # Add in the task_duration and job id to the queue
-                    # Since future time is less than current_time,
-                    # current_time will account for queueing delays
-                    # Queue details is (task_length, job.id)
-                    task_duration = queue_details[0]
-                    job_id = queue_details[1]
-                    self.queued_probes.append([job_id, task_duration, (self.executing_big == True or self.queued_big > 0), 0, False, -1, future_time])
-                    #print "Task for job %s will be processed at worker %s at time %f" % (queue_details[1], self.id, future_time)
-                else:
-                    self.future_probes.put((future_time, queue_details))
-                    break
-        else:
-            self.queued_probes.append([job_id,task_length,(self.executing_big == True or self.queued_big > 0), 0, False,-1, current_time])
+        self.queued_probes.append([job_id,task_length,(self.executing_big == True or self.queued_big > 0), 0, False,-1, current_time])
 
         # Now, tasks are ready to maybe start
         if (long_job):
@@ -1175,6 +1152,7 @@ class Simulation(object):
         # Randomized logarthmic distribution of hops
         hops = random.sample(hops, TOTAL_WORKERS)
         tasks_left_to_place = len(job.unscheduled_tasks)
+        long_job = job.job_type_for_scheduling == BIG
         while True:
             # Sort all workers in this DC according to their queue lengths.
             # Do this just once to simulate the resource table and store a local copy to work with
@@ -1190,6 +1168,30 @@ class Simulation(object):
             task_workers = {}
             for worker in sorted_workers:
                 task_workers[worker] = self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, hops[worker.id])
+            #### TESTING - Ensure if there are any non_long job workers, they are always ahead in the sorted list
+            '''
+            non_long_job_workers = []
+            btmap = self.cluster_status_keeper.get_btmap()
+            for worker in sorted_workers:
+                if not btmap.test(worker.id):
+                    non_long_job_workers.append(worker)
+            if len(non_long_job_workers) > 0:
+                non_long_job_workers_collection = collections.Counter(non_long_job_workers)
+                sorted_workers_collection = collections.Counter(sorted_workers[0:len(non_long_job_workers)])
+                if non_long_job_workers_collection != sorted_workers_collection:
+                    print "Non long job workers includes ", non_long_job_workers_collection - sorted_workers_collection
+                    print "Sorted workers includes ", sorted_workers_collection - non_long_job_workers_collection
+                    print "Length of Non long job workers ", len(non_long_job_workers)
+                    print "Length of sorted workers ", len(sorted_workers)
+                    print "Current time ", current_time
+                    for worker in non_long_job_workers_collection - sorted_workers_collection:
+                        self.cluster_status_keeper.print_worker_queue_status(worker.id)
+                    for worker in sorted_workers_collection - non_long_job_workers_collection:
+                        self.cluster_status_keeper.print_worker_queue_status(worker.id)
+                assert (collections.Counter(non_long_job_workers) == collections.Counter(sorted_workers[0:len(non_long_job_workers)]))
+            '''
+            #### TESTING
+
             #print "Task worker ", sorted_workers[0].id," queue length at time", current_time," is ", task_workers[sorted_workers[0]]    
             #print "Task worker ", sorted_workers[1].id, " queue length  at time", current_time," is ", task_workers[sorted_workers[1]]    
             # Schedule tasks
@@ -1202,7 +1204,9 @@ class Simulation(object):
                 # Update the local copy of queue lengths
                 task_workers[worker] = worker_queue_length + job.estimated_task_duration
                 task_index += 1
-                self.cluster_status_keeper.update_workers_queue([worker.id], True, job.estimated_task_duration, job.id, task_arrival_time)
+                # Only update the cluster status for long jobs
+                if long_job:
+                    self.cluster_status_keeper.update_workers_queue([worker.id], True, job.estimated_task_duration, job.id, task_arrival_time)
 
             tasks_left_to_place -= maximum_workers_needed_in_iteration
             if tasks_left_to_place == 0:
