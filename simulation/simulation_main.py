@@ -309,8 +309,8 @@ class ClusterStatusKeeper():
     def get_workers_queue_status(self, worker_index):
         task_index = 0
         estimated_time = 0
-        while task_index < len(self.workers_queues[worker_index]):
-            estimated_time += self.workers_queues[worker_index][task_index][INDEX_OF_TASK_DURATION]
+        while task_index < len(self.worker_queues[worker_index]):
+            estimated_time += self.worker_queues[worker_index][task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION]
             task_index += 1
         return estimated_time
 
@@ -430,10 +430,8 @@ class Worker(object):
 
         # List of times when slots were freed, for each free slot (used to track the time the worker spends idle).
         self.free_slots = []
-        self.slots_occupied_until = []
         while len(self.free_slots) < num_slots:
             self.free_slots.append(0)
-            self.slots_occupied_until.append(0)
 
         self.queued_big = 0
         self.queued_probes = []
@@ -483,7 +481,6 @@ class Worker(object):
     #Worker class
     def free_slot(self, current_time):
         self.free_slots.append(current_time)
-        self.slots_occupied_until.pop()
         self.simulation.increase_free_slots_for_load_tracking(self)
         self.executing_big = False
 
@@ -622,7 +619,6 @@ class Worker(object):
 
         job_id = self.queued_probes[pos][0]
         estimated_task_duration = self.queued_probes[pos][1]
-        self.slots_occupied_until.append(current_time + estimated_task_duration)
 
         self.executing_big = self.simulation.jobs[job_id].job_type_for_scheduling == BIG
         if self.executing_big:
