@@ -13,4 +13,4 @@ pypy simulation_main.py YH.tr no yes -1 90.5811 100 98 1 2 5 MEAN 0 0 ATC 10000 
 pypy simulation_main.py YH.tr no yes -1 90.5811 100 98 1 2 5 MEAN 0 0 ATC 10000 10 8000 yes 8 2 no DLWL
 # Murmuration with resource heartbeats generated as required, and all jobs
 # considered long, and scheduled in a centralized way 
-pypy simulation_main.py YH.tr no yes -1 90.5811 100 100 1 2 5 MEAN 0 0 ATC 10000 10 8000 no 0 2 no Murmuration
+pypy simulation_main.py YH.tr no yes -1 90.5811 100 100 1 2 5 MEAN 0 0 ATC 10000 10 8000 yes 0 2 no Murmuration

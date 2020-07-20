@@ -35,7 +35,7 @@ class Job(object):
         job_args                    = (line.split('\n'))[0].split()
         self.start_time             = float(job_args[0])
         self.num_tasks              = int(job_args[1])
-        mean_task_duration          = int(float(job_args[2]))
+        mean_task_duration          = float(job_args[2])
 
         #dephase the incoming job in case it has the exact submission time as another already submitted job
         if self.start_time not in job_start_tstamps:
@@ -52,15 +52,15 @@ class Job(object):
         self.off_mean_bottom = off_mean_bottom
         self.off_mean_top = off_mean_top
 
-        self.job_type_for_scheduling = BIG if mean_task_duration > CUTOFF_THIS_EXP  else SMALL
-        self.job_type_for_comparison = BIG if mean_task_duration > CUTOFF_BIG_SMALL else SMALL
+        self.job_type_for_scheduling = BIG if int(mean_task_duration) > CUTOFF_THIS_EXP  else SMALL
+        self.job_type_for_comparison = BIG if int(mean_task_duration) > CUTOFF_BIG_SMALL else SMALL
         
 
         if   task_distribution == TaskDurationDistributions.FROM_FILE: 
             self.file_task_execution_time(job_args)
         elif task_distribution == TaskDurationDistributions.CONSTANT:
             while len(self.unscheduled_tasks) < self.num_tasks:
-                self.unscheduled_tasks.appendleft(mean_task_duration)
+                self.unscheduled_tasks.appendleft(int(mean_task_duration))
 
         self.estimate_distribution = estimate_distribution
 
@@ -1151,11 +1151,11 @@ class Simulation(object):
             ########################################################################################
             maximum_workers_needed_in_iteration = tasks_left_to_place if tasks_left_to_place <= len(self.workers) else len(self.workers) 
             sorted_workers = sorted(self.workers,
-                                    key=lambda worker:(self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, hops[worker.id])))[0:maximum_workers_needed_in_iteration]
+                                    key=lambda worker:(self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, hops[worker.id]), random.random()))[0:maximum_workers_needed_in_iteration]
             # Calculate present queue lengths for these workers and take note.
             task_workers = {}
             for worker in sorted_workers:
-                task_workers[worker] = self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, hops[worker.id])
+                task_workers[worker.id] = self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, hops[worker.id])
 
             #### TESTING - Ensure if there are any non_long job workers, they are always ahead in the sorted list
             # If there are nodes not running long jobs, they better show up here.
@@ -1176,16 +1176,16 @@ class Simulation(object):
             # Schedule tasks
             task_index = 0
             while task_index < maximum_workers_needed_in_iteration:
-                worker, worker_queue_length = sorted(task_workers.items(), key=operator.itemgetter(1))[0]
+                worker_id, worker_queue_length = sorted(task_workers.items(), key=operator.itemgetter(1))[0]
                 task_arrival_time = current_time + NETWORK_DELAY
                 task_arrival_events.append((task_arrival_time,
-                     ProbeEvent(task_arrival_time, self.workers[worker.id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+                     ProbeEvent(task_arrival_time, self.workers[worker_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
                 # Update the local copy of queue lengths
-                task_workers[worker] = worker_queue_length + job.estimated_task_duration
+                task_workers[worker_id] = worker_queue_length + job.estimated_task_duration
                 task_index += 1
                 # Only update the cluster status for long jobs
                 if long_job:
-                    self.cluster_status_keeper.update_workers_queue([worker.id], True, job.estimated_task_duration, job.id, task_arrival_time)
+                    self.cluster_status_keeper.update_workers_queue([worker_id], True, job.estimated_task_duration, job.id, task_arrival_time)
 
             tasks_left_to_place -= maximum_workers_needed_in_iteration
             if tasks_left_to_place == 0:
