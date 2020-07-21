@@ -327,9 +327,8 @@ class ClusterStatusKeeper():
         for worker in worker_indices:
             # tasks is of the form -  [[10, 20, 1], [20, 20, 1], ...]
             tasks = self.worker_queues[worker]
-
             if increase:
-                # Append (arrival_time_at_worker, task_duration) to the end of tasks list
+                # Append (arrival_time_at_worker, task_duration, job_id) to the end of tasks list
                 tasks.append([arrival_time_at_worker, duration, job_id])
                 self.btmap.set(worker)
             else:
@@ -1140,6 +1139,7 @@ class Simulation(object):
         # Randomized logarthmic distribution of hops
         hops = random.sample(hops, TOTAL_WORKERS)
         tasks_left_to_place = len(job.unscheduled_tasks)
+        # Everything is a long job in Murmuration - cutoff parameter #3 is set to -1
         long_job = job.job_type_for_scheduling == BIG
         while True:
             # Sort all workers in this DC according to their queue lengths.
@@ -1184,7 +1184,7 @@ class Simulation(object):
                 task_workers[worker_id] = worker_queue_length + job.estimated_task_duration
                 task_index += 1
                 # Only update the cluster status for long jobs
-                if long_job:
+                if self.SCHEDULE_BIG_CENTRALIZED:
                     self.cluster_status_keeper.update_workers_queue([worker_id], True, job.estimated_task_duration, job.id, task_arrival_time)
 
             tasks_left_to_place -= maximum_workers_needed_in_iteration
@@ -1230,7 +1230,7 @@ class Simulation(object):
 
         if is_job_complete:
             self.jobs_completed += 1;
-            print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time)
+            print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time), " job id", job_id
 
         events.append((task_completion_time, TaskEndEvent(worker, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, job.estimated_task_duration, this_task_id)))
         

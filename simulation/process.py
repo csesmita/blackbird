@@ -14,14 +14,21 @@
 # This file gets overwritten for every run for the same scheduler design for
 # the same set of traces for the same type of job for different cluster sizes.
 #
-# Format of the output file -
+# Format of the output files -
 # ---------------------------
+# Percentile file:
+#
 # Cluster Size 4000
 # 50th Percentile - ..
 # 90th Percentile - ..
 # 99th Percentile - ..
 #
 # Cluster Size 8000
+# ...
+#
+# Time comparison
+# jobid : response_time
+# jobid : response_time
 # ...
 
 
@@ -36,13 +43,20 @@ if(len(sys.argv) != 6):
 # pypy process.py finished_file eagle short yahoo 4000 
 infile = open(sys.argv[1], 'r')
 outfile = open(sys.argv[2].lower()+"_"+sys.argv[3]+"_"+sys.argv[4], 'a+')
+timesfile = open(sys.argv[2] +"_"+sys.argv[3] + "_time_"+sys.argv[4], 'w')
 jobrunningtime = []
+jobid_runningtime = {}
 for line in infile:
     job_short_long = "short" if ('by_def:  0' in line) else "long"
+    #This is the type of job we are looking for
     if job_short_long != sys.argv[3]:
         continue
-    #This is the type of job we are looking for
-    jobrunningtime.append(float(line.split('total_job_running_time: ')[1]))
+    # Job id is the last parameter, so everything after it describes the ID
+    jobid = int(line.split('job id ')[1])
+    runningtime = float(line.split('total_job_running_time: ')[1].split(' ')[1])
+    jobrunningtime.append(runningtime)
+    jobid_runningtime[jobid] = runningtime
+    timesfile.write("%s\t%s\n"%(jobid, jobid_runningtime[jobid] ))
 
 infile.close()
 
