@@ -78,7 +78,8 @@ class Job(object):
         self.probed_workers = set()
         self.remaining_exec_time = self.estimated_task_duration*len(self.unscheduled_tasks)
 
-    #Job class    """ Returns true if the job has completed, and false otherwise. """
+    #Job class
+    """ Returns true if the job has completed, and false otherwise. """
     def update_task_completion_details(self, completion_time):
         self.completed_tasks_count += 1
         self.end_time = max(completion_time, self.end_time)
@@ -270,7 +271,7 @@ class WorkerHeartbeatEvent(Event):
 #####################################################################################################################
 
 class ProbeEvent(Event):
-    def __init__(self, task_arrival_time, worker, job_id, task_length, job_type_for_scheduling, btmap):
+    def __init__(self, worker, job_id, task_length, job_type_for_scheduling, btmap):
         self.worker = worker
         self.job_id = job_id
         self.task_length = task_length
@@ -451,6 +452,8 @@ class Worker(object):
 
         self.btmap = None
         self.btmap_tstamp = -1
+        # Parameter to measure how long this worker is busy in the total run.
+        self.busy_time = 0
 
     #Worker class
     def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap, handle_stealing):
@@ -522,7 +525,7 @@ class Worker(object):
             print current_time, ": Worker ", self.id," failed to steal. attempts: ",ctr_it
             stats.STATS_STEALING_MESSAGES += ctr_it
 
-        for job_id, task_length, behind_big, cum, sticky, handle_steal in new_probes:
+        for job_id, task_length, behind_big, cum, sticky, handle_steal, probe_time in new_probes:
             assert (self.simulation.jobs[job_id].job_type_for_comparison != BIG)
             new_events.extend(self.add_probe(job_id, task_length, SMALL, current_time, None,True))
 
@@ -618,6 +621,7 @@ class Worker(object):
 
         job_id = self.queued_probes[pos][0]
         estimated_task_duration = self.queued_probes[pos][1]
+        probe_arrival_time = self.queued_probes[pos][6]
 
         self.executing_big = self.simulation.jobs[job_id].job_type_for_scheduling == BIG
         if self.executing_big:
@@ -627,7 +631,7 @@ class Worker(object):
         else:
             self.tstamp_start_crt_big_task = -1
 
-        was_successful, events = self.simulation.get_task(job_id, self, current_time)
+        was_successful, events = self.simulation.get_task(job_id, self, current_time, probe_arrival_time)
         job_bydef_big = (self.simulation.jobs[job_id].job_type_for_comparison == BIG)
        
         if(not job_bydef_big and self.queued_probes[0][5] == 1 and self.in_big and was_successful):
@@ -647,7 +651,7 @@ class Worker(object):
                 if(self.in_big):
                     stats.STATS_STICKY_EXECUTIONS_IN_BP +=1
             self.queued_probes[pos][4] = True
-    
+
         if(SBP_ENABLED==False or not was_successful or job_bydef_big):
             #so the probe remains if SBP is on, was succesful and is small        
             self.queued_probes.pop(pos)
@@ -1014,7 +1018,7 @@ class Simulation(object):
 
         probe_events = []
         for worker_index in worker_indices:
-            probe_events.append((current_time + NETWORK_DELAY, ProbeEvent(current_time + NETWORK_DELAY, self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+            probe_events.append((current_time + NETWORK_DELAY, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
             job.probed_workers.add(worker_index)
         return probe_events
 
@@ -1028,7 +1032,7 @@ class Simulation(object):
         for worker_index in worker_list:
             if(not self.workers[worker_index].executing_big and not self.workers[worker_index].queued_big):
                 probe_time = current_time + NETWORK_DELAY*(roundnr/2+1)
-                probe_events.append((probe_time, ProbeEvent(probe_time, self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, None)))
+                probe_events.append((probe_time, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, None)))
                 job.probed_workers.add(worker_index)
                 successful_worker_indices.append(worker_index)
             if (self.workers[worker_index].btmap_tstamp > freshest_btmap_tstamp):
@@ -1071,7 +1075,7 @@ class Simulation(object):
 
         if (job.job_type_for_scheduling == BIG):
             for worker_index in worker_indices:
-                probe_events.append((current_time + NETWORK_DELAY, ProbeEvent(current_time + NETWORK_DELAY, self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+                probe_events.append((current_time + NETWORK_DELAY, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
                 job.probed_workers.add(worker_index)
 
         else:
@@ -1177,9 +1181,11 @@ class Simulation(object):
             task_index = 0
             while task_index < maximum_workers_needed_in_iteration:
                 worker_id, worker_queue_length = sorted(task_workers.items(), key=operator.itemgetter(1))[0]
+                # Since none of the other schedulers account for delay in hops, ignore the hops parameter here.
+                #task_arrival_time = current_time + hops[worker_id] * NETWORK_DELAY
                 task_arrival_time = current_time + NETWORK_DELAY
                 task_arrival_events.append((task_arrival_time,
-                     ProbeEvent(task_arrival_time, self.workers[worker_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+                     ProbeEvent(self.workers[worker_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
                 # Update the local copy of queue lengths
                 task_workers[worker_id] = worker_queue_length + job.estimated_task_duration
                 task_index += 1
@@ -1212,11 +1218,13 @@ class Simulation(object):
 
 
     #Simulation class
-    def get_task(self, job_id, worker, current_time):
+    def get_task(self, job_id, worker, current_time, probe_arrival_time):
         job = self.jobs[job_id]
         #account for the fact that this is called when the probe is launched but it needs an RTT to talk to the scheduler
         get_task_response_time = current_time + 2 * NETWORK_DELAY
-        
+        task_wait_time = current_time - probe_arrival_time
+        scheduler_algorithm_time = probe_arrival_time - job.start_time
+
         if len(job.unscheduled_tasks) == 0 :
             return False, [(get_task_response_time, NoopGetTaskResponseEvent(worker))]
 
@@ -1224,13 +1232,15 @@ class Simulation(object):
         Job.per_job_task_info[job_id][this_task_id] = current_time
         events = []
         task_duration = job.unscheduled_tasks.pop()
+        worker.busy_time += task_duration
         task_completion_time = task_duration + get_task_response_time
         #print current_time, " worker:", worker.id, " task from job ", job_id, " task duration: ", task_duration, " will finish at time ", task_completion_time
         is_job_complete = job.update_task_completion_details(task_completion_time)
 
         if is_job_complete:
             self.jobs_completed += 1;
-            print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time), " job id", job_id
+            # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time + Worker queue wait time + Task processing time
+            print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job_id, " scheduler_algorithm_time ", scheduler_algorithm_time, " task_wait_time ", task_wait_time, " task_processing_time ", task_duration
 
         events.append((task_completion_time, TaskEndEvent(worker, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, job.estimated_task_duration, this_task_id)))
         
@@ -1256,6 +1266,8 @@ class Simulation(object):
         last_time = 0
 
         self.jobs_file = open(self.WORKLOAD_FILE, 'r')
+        line = self.jobs_file.readline()
+        first_time = float(line.split()[0])
 
         self.task_distribution = TaskDurationDistributions.FROM_FILE
 
@@ -1273,10 +1285,10 @@ class Simulation(object):
             assert(self.off_mean_top>self.off_mean_bottom)
 
         if(SYSTEM_SIMULATED == "DLWL"):
+            first_time = 0
             self.shared_cluster_status = self.cluster_status_keeper.get_queue_status()
             self.event_queue.put((0, WorkerHeartbeatEvent(self)))
 
-        line = self.jobs_file.readline()
         new_job = Job(self.task_distribution, line, estimate_distribution, self.off_mean_bottom, self.off_mean_top)
         self.event_queue.put((float(line.split()[0]), JobArrival(self, self.task_distribution, new_job, self.jobs_file)))
         self.jobs_scheduled = 1
@@ -1293,6 +1305,13 @@ class Simulation(object):
         print "Simulation ending, no more events"
         self.jobs_file.close()
 
+        # Calculate utilizations of worker machines in DC
+        time_elapsed_in_dc = current_time - first_time
+        total_busyness = 0
+        for worker in self.workers:
+            total_busyness += worker.busy_time
+        utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * TOTAL_WORKERS))
+        print "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_WORKERS, " workers is ", utilization
 #####################################################################################################################
 #globals
 
