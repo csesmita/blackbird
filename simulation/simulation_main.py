@@ -23,9 +23,10 @@ class TaskDurationDistributions:
 class EstimationErrorDistribution:
     CONSTANT, RANDOM, MEAN  = range(3)
 
-MAX_NUM_HOPS = 4
-NUM_DIRECTLY_CONNECTED_NEIGHBORS = 7
-FAILURE_PROBABILITY = 0.00001
+MAX_NUM_HOPS = 1
+NUM_DIRECTLY_CONNECTED_NEIGHBORS = 7 # Also the number of machines in a blast radius
+#FAILURE_PROBABILITY = 0.00001
+FAILURE_PROBABILITY = 0
 
 class Job(object):
     job_count = 1
@@ -194,10 +195,13 @@ class JobArrival(Event, file):
                     # should be updated when a decision for workers is made.
                     # worker_indices for Murmuration only indicates the
                     # scheduler. send_probes() does both worker selection and
-                    # sending probe requests. 
-                    worker_indices.append(random.choice(self.simulation.worker_indices))
-                    # update worker queues once scheduler makes a decision
-                else:    
+                    # sending probe requests.
+                    for worker in self.simulation.workers:
+                        if not worker.is_off:
+                            worker_indices.append(random.choice(self.simulation.worker_indices))
+                            break
+                else:
+                    # Eagle
                     possible_workers = self.simulation.big_partition_workers_hash
                     worker_indices = self.simulation.find_workers_long_job_prio(self.job.num_tasks, self.job.estimated_task_duration, current_time, self.simulation, possible_workers)
                     self.simulation.cluster_status_keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration, self.job.id, current_time)
@@ -240,6 +244,17 @@ class PeriodicTimerEvent(Event):
             small_not_big_load        = str(int(10000*(1-self.simulation.free_slots_small_not_big_partition*1.0/len(self.simulation.small_not_big_partition_workers)))/100.0)
 
         print >> load_file,"total_load: " + total_load + " small_load: " + small_load + " big_load: " + big_load + " small_not_big_load: " + small_not_big_load+" current_time: " + str(current_time) 
+
+        #worker_to_switch_off = int(PERCENTAGE_WORKERS_OFF*TOTAL_WORKERS/(100*MONITOR_INTERVAL))
+        # Switch off exactly one machine if possible as a part of power conservation
+        # The machine should not be the dedicated machine for short jobs
+        if random.random() < PERCENTAGE_WORKERS_OFF:
+            for worker in self.simulation.workers:
+                if not worker.is_off and not worker.in_small_not_big:
+                    worker.is_off = True
+                    worker.switch_off_time = current_time
+                    print "Turning off worker ", worker.id
+                    break
 
         if(not self.simulation.event_queue.empty()):
             new_events.append((current_time + MONITOR_INTERVAL,self))
@@ -353,7 +368,9 @@ class ClusterStatusKeeper():
     # This node sees its own scheduled tasks if current time >= their future time.
     # This node sees other nodes' scheduled task if current time >= (their future time + NETWORK_DELAY)
     # for update to go from that worker node to all other scheduler nodes.
-    def get_workers_queue_status_delayed(self, worker_index, scheduler_index, current_time, hop):
+    def get_workers_queue_status_delayed(self, worker_index, scheduler_index, current_time, hop, is_off):
+        if is_off:
+            return float("inf")
         worker_estimated_time = 0
         if worker_index == scheduler_index:
             hop = 0
@@ -456,6 +473,9 @@ class Worker(object):
         self.btmap_tstamp = -1
         # Parameter to measure how long this worker is busy in the total run.
         self.busy_time = 0
+        # Parameter to indicate if worker is in power saving
+        self.is_off = False
+        self.switch_off_time = 0
 
     #Worker class
     def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap, handle_stealing):
@@ -923,6 +943,10 @@ class Simulation(object):
             worker_obj    = simulation.workers[index]
             worker_id     = index
 
+            # If machine is switched off, don't consider it any further
+            if self.workers[worker_id].is_off:
+                continue
+
             if qlen == 0 :
                 empty_nodes.append(worker_id)
                 if(len(empty_nodes) == workers_needed):
@@ -1010,6 +1034,7 @@ class Simulation(object):
 
     # Simulation class
     # Returns an array denoting distance of workers from an arbitary worker node
+    # Note - this function will return 1 when MAX_NUM_HOPS = 1.
     def get_hops(self, count):
         node_array = numpy.logspace(1, MAX_NUM_HOPS, num=count, endpoint=True, base=NUM_DIRECTLY_CONNECTED_NEIGHBORS)
         return [int(math.ceil(math.log(node, NUM_DIRECTLY_CONNECTED_NEIGHBORS))) for node in node_array]
@@ -1172,11 +1197,11 @@ class Simulation(object):
             ########################################################################################
             maximum_workers_needed_in_iteration = tasks_left_to_place if tasks_left_to_place <= len(self.workers) else len(self.workers) 
             sorted_workers = sorted(self.workers,
-                                    key=lambda worker:(self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, hops[worker.id]), random.random()))[0:maximum_workers_needed_in_iteration]
+                                    key=lambda worker:(self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, hops[worker.id], worker.is_off), random.random()))[0:maximum_workers_needed_in_iteration]
             # Calculate present queue lengths for these workers and take note.
             task_workers = {}
             for worker in sorted_workers:
-                task_workers[worker.id] = self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, hops[worker.id])
+                task_workers[worker.id] = self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, hops[worker.id], worker.is_off)
 
             #### TESTING - Ensure if there are any non_long job workers, they are always ahead in the sorted list
             # If there are nodes not running long jobs, they better show up here.
@@ -1281,6 +1306,7 @@ class Simulation(object):
 
         if len(job.unscheduled_tasks) == 0:
             logging.info("Finished scheduling tasks for job %s" % job.id)
+
         return True, 0, events
 
 
@@ -1344,11 +1370,20 @@ class Simulation(object):
 
         # Calculate utilizations of worker machines in DC
         time_elapsed_in_dc = current_time - first_time
+        print "Total time elapsed in the DC is", time_elapsed_in_dc, "s" 
         total_busyness = 0
         for worker in self.workers:
             total_busyness += worker.busy_time
         utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * TOTAL_WORKERS))
         print "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_WORKERS, " workers is ", utilization
+
+        # Calculate average power saved
+        power_units_saved = 0
+        for worker in self.workers:
+            if worker.is_off:
+                power_units_saved += current_time - worker.switch_off_time 
+        print "% power saved is ", 100 * float(power_units_saved/(time_elapsed_in_dc * TOTAL_WORKERS))
+
 #####################################################################################################################
 #globals
 
@@ -1363,7 +1398,7 @@ SMALL = 0
 job_start_tstamps = {}
 
 random.seed(123456798)
-if(len(sys.argv) != 23):
+if(len(sys.argv) != 24):
     print "Incorrent number of parameters."
     sys.exit(1)
 
@@ -1390,6 +1425,7 @@ HEARTBEAT_DELAY                 = int(sys.argv[19])
 MIN_NR_PROBES                   = int(sys.argv[20])
 SBP_ENABLED                     = (sys.argv[21] == "yes")
 SYSTEM_SIMULATED                = sys.argv[22]  
+PERCENTAGE_WORKERS_OFF          = float(sys.argv[23])
 
 #MIN_NR_PROBES = 20 #1/100*TOTAL_WORKERS
 CAP_SRPT_SBP = 5 #cap on the % of slowdown a job can tolerate for SRPT and SBP
