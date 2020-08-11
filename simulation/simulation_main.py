@@ -352,6 +352,8 @@ class ClusterStatusKeeper():
             else:
                 # Search for the first entry with this task_duration and pop the task
                 original_task_queue_length = len(tasks)
+                if original_task_queue_length == 0:
+                    return
                 task_index = 0
                 while task_index < original_task_queue_length:
                     if tasks[task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION] == duration and tasks[task_index][ClusterStatusKeeper.INDEX_OF_JOB_ID] == job_id:
@@ -359,7 +361,7 @@ class ClusterStatusKeeper():
                         tasks.pop(task_index)
                         break
                     task_index += 1
-                assert task_index < original_task_queue_length, (" offending value for task_duration: %r %r %i" % (task_duration,job_id,worker))
+                assert task_index <= original_task_queue_length, (" offending value for task_duration: %r %r %i" % (duration,job_id,worker))
                 if(len(tasks) == 0):
                     self.btmap.flip(worker)
 
@@ -368,12 +370,10 @@ class ClusterStatusKeeper():
     # This node sees its own scheduled tasks if current time >= their future time.
     # This node sees other nodes' scheduled task if current time >= (their future time + NETWORK_DELAY)
     # for update to go from that worker node to all other scheduler nodes.
-    def get_workers_queue_status_delayed(self, worker_index, scheduler_index, current_time, hop, is_off):
+    def get_workers_queue_status_delayed(self, worker_index, current_time, hop, is_off):
         if is_off:
             return float("inf")
         worker_estimated_time = 0
-        if worker_index == scheduler_index:
-            hop = 0
         limit = current_time - hop * NETWORK_DELAY
         task_index = 0
         while task_index < len(self.worker_queues[worker_index]):
@@ -638,6 +638,10 @@ class Worker(object):
                     return [(current_time, NoopGetTaskResponseEvent(self))]
             else:
                 pos = self.get_next_probe_acc_to_srpt(current_time)
+                if (pos == -1):
+                    assert (len(self.queued_probes) == 0)
+                    #Cannot just return [], free_slot would not be called again
+                    return [(current_time, NoopGetTaskResponseEvent(self))]
         else:
             pos = 0
 
@@ -808,10 +812,16 @@ class Worker(object):
         estimated_delay         = 0        
 
         shortest_slack_in_front = float('inf')
-        for position_it in range(0,len(self.queued_probes)):
+        len_queue = len(self.queued_probes)
+        position_it = 0
+        while position_it < len_queue:
             job_id    = self.queued_probes[position_it][0]
             remaining = self.get_remaining_exec_time_for_job(job_id, current_time)
-            assert(remaining >= 0)
+            # Improvement: taking out probes of finished jobs
+            if remaining == -1:
+                self.queued_probes.pop(position_it)
+                len_queue = len(self.queued_probes)
+                continue
 
             estimated_task_duration = self.simulation.jobs[job_id].estimated_task_duration
 
@@ -827,8 +837,9 @@ class Worker(object):
                 slack = CAP_SRPT_SBP*estimated_task_duration - self.queued_probes[position_it][3] # will be negative is estimated_task_duration = 0
                 if(slack < shortest_slack_in_front): #improvement: if its 0, no task will be allowed to bypass it
                     shortest_slack_in_front = slack
+            position_it += 1
 
-        assert(position_in_queue >= 0)
+        #assert(position_in_queue >= 0)
         # Add estimated_delay to probes in front        
         for delay_it in range(0,position_in_queue):
             new_acc_delay = self.queued_probes[delay_it][3] + estimated_delay            
@@ -1035,9 +1046,12 @@ class Simulation(object):
     # Simulation class
     # Returns an array denoting distance of workers from an arbitary worker node
     # Note - this function will return 1 when MAX_NUM_HOPS = 1.
-    def get_hops(self, count):
+    def get_hops(self, count, scheduler_index):
         node_array = numpy.logspace(1, MAX_NUM_HOPS, num=count, endpoint=True, base=NUM_DIRECTLY_CONNECTED_NEIGHBORS)
-        return [int(math.ceil(math.log(node, NUM_DIRECTLY_CONNECTED_NEIGHBORS))) for node in node_array]
+        hops = [int(math.ceil(math.log(node, NUM_DIRECTLY_CONNECTED_NEIGHBORS))) for node in node_array]
+        # The hop from scheduler node to itself is 0
+        hops[scheduler_index] = 0
+        return hops
 
 
     #Simulation class
@@ -1181,12 +1195,13 @@ class Simulation(object):
         assert len(worker_indices) == 1
         scheduler_index = worker_indices[0]
         # Logarthmic distribution of hops
-        hops = self.get_hops(TOTAL_WORKERS)
+        hops = self.get_hops(TOTAL_WORKERS, scheduler_index)
         # Randomized logarthmic distribution of hops
         hops = random.sample(hops, TOTAL_WORKERS)
         tasks_left_to_place = len(job.unscheduled_tasks)
-        # Everything is a long job in Murmuration - cutoff parameter #3 is set to -1
-        long_job = job.job_type_for_scheduling == BIG
+        # The following probes are selected per task - Highest ranked, closest and ranked, highest ranked + tasks_left_to_place, highest ranked + hash(scheduler_index)
+        NUM_MURMURATION_PROBES_PER_TASK = 4
+        workers_needed = tasks_left_to_place * NUM_MURMURATION_PROBES_PER_TASK
         while True:
             # Sort all workers in this DC according to their queue lengths.
             # Do this just once to simulate the resource table and store a local copy to work with
@@ -1195,13 +1210,14 @@ class Simulation(object):
             ########################################################################################
             # For all tasks of this job, try to assign as many tasks to a worker node as possible.
             ########################################################################################
-            maximum_workers_needed_in_iteration = tasks_left_to_place if tasks_left_to_place <= len(self.workers) else len(self.workers) 
+            maximum_workers_needed_in_iteration = workers_needed if workers_needed <= len(self.workers) else len(self.workers) 
             sorted_workers = sorted(self.workers,
-                                    key=lambda worker:(self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, hops[worker.id], worker.is_off), random.random()))[0:maximum_workers_needed_in_iteration]
+                                    key=lambda worker:(self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, current_time, hops[worker.id], worker.is_off), random.random()))[0:maximum_workers_needed_in_iteration]
             # Calculate present queue lengths for these workers and take note.
             task_workers = {}
             for worker in sorted_workers:
-                task_workers[worker.id] = self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, hops[worker.id], worker.is_off)
+                task_workers[worker.id] = self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, current_time, hops[worker.id], worker.is_off)
+
 
             #### TESTING - Ensure if there are any non_long job workers, they are always ahead in the sorted list
             # If there are nodes not running long jobs, they better show up here.
@@ -1222,21 +1238,41 @@ class Simulation(object):
             # Schedule tasks
             task_index = 0
             while task_index < maximum_workers_needed_in_iteration:
-                worker_id, worker_queue_length = sorted(task_workers.items(), key=operator.itemgetter(1))[0]
+                # The following probes are selected per task - 
+                # Highest ranked, 
+                # Closest and ranked, 
+                # highest ranked + tasks_left_to_place, 
+                # highest ranked + hash(scheduler_index)
+                #worker_id, worker_queue_length = sorted(task_workers.items(), key=operator.itemgetter(1))[0]
+                sorted_workers = sorted(task_workers.items(), key=operator.itemgetter(1))
+                highest_ranked_id, highest_ranked_queue_length = sorted_workers[0]
+                hash_ranked_id, hash_ranked_queue_length = sorted_workers[hash(scheduler_index) % maximum_workers_needed_in_iteration]
+                closest_ranked_id = 0
+                closest_ranked_queue_length = 0
+                for worker_id, queue_len in sorted_workers:
+                    if worker_id != closest_ranked_id and hops[worker_id] < hops[closest_ranked_id]:
+                        closest_ranked_id = worker_id
+                        closest_ranked_queue_length = queue_len
                 # Since none of the other schedulers account for delay in hops, ignore the hops parameter here.
                 #task_arrival_time = current_time + hops[worker_id] * NETWORK_DELAY
                 task_arrival_time = current_time + NETWORK_DELAY
                 task_arrival_events.append((task_arrival_time,
-                     ProbeEvent(self.workers[worker_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+                     ProbeEvent(self.workers[highest_ranked_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+                task_arrival_events.append((task_arrival_time,
+                     ProbeEvent(self.workers[hash_ranked_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+                task_arrival_events.append((task_arrival_time,
+                     ProbeEvent(self.workers[closest_ranked_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
                 # Update the local copy of queue lengths
-                task_workers[worker_id] = worker_queue_length + job.estimated_task_duration
+                task_workers[highest_ranked_id] = highest_ranked_queue_length + job.estimated_task_duration
+                task_workers[hash_ranked_id] = hash_ranked_queue_length + job.estimated_task_duration
+                task_workers[closest_ranked_id] = closest_ranked_queue_length + job.estimated_task_duration
                 task_index += 1
                 # Only update the cluster status for long jobs
                 if self.SCHEDULE_BIG_CENTRALIZED:
                     self.cluster_status_keeper.update_workers_queue([worker_id], True, job.estimated_task_duration, job.id, task_arrival_time)
 
-            tasks_left_to_place -= maximum_workers_needed_in_iteration
-            if tasks_left_to_place == 0:
+            workers_needed -= maximum_workers_needed_in_iteration
+            if workers_needed == 0:
                break
         return task_arrival_events
 
@@ -1275,7 +1311,7 @@ class Simulation(object):
         worker.busy_time += task_duration
         task_completion_time = task_duration + get_task_response_time
         
-        # Fault injection
+        # Fault injection - At scheduler level.
         failure_list = []
         failure_list.append(self.get_failure_status(scheduler_algorithm_time))
         failure_list.append(self.get_failure_status(task_wait_time))
@@ -1301,7 +1337,8 @@ class Simulation(object):
 
         events.append((task_completion_time, TaskEndEvent(worker, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, job.estimated_task_duration, this_task_id)))
         
-        if SRPT_ENABLED and SYSTEM_SIMULATED == "Eagle":
+        if SRPT_ENABLED:
+            if SYSTEM_SIMULATED == "Eagle" or SYSTEM_SIMULATED == "Murmuration":
                 events.append((current_time + 2*NETWORK_DELAY, UpdateRemainingTimeEvent(job)))
 
         if len(job.unscheduled_tasks) == 0:
@@ -1442,8 +1479,8 @@ finished_file.close()
 load_file.close()
 
 # Generate CDF data
-os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "short" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
-os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "long" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
+#os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "short" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
+#os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "long" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
 
 print >> stats_file, "STATS_SH_PROBES_ASSIGNED_IN_BP:      ",    stats.STATS_SH_PROBES_ASSIGNED_IN_BP
 print >> stats_file, "STATS_SH_PROBES_QUEUED_BEHIND_BIG:      ",    stats.STATS_SH_PROBES_QUEUED_BEHIND_BIG 
