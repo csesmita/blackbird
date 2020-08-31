@@ -193,9 +193,8 @@ class JobArrival(Event, file):
                     # worker_indices for Murmuration only indicates the
                     # scheduler. send_probes() does both worker selection and
                     # sending probe requests.
-                    for worker in self.simulation.workers:
-                        if not worker.is_off:
-                            worker_indices.append(random.choice(self.simulation.worker_indices))
+                    for scheduler in self.simulation.schedulers:
+                            worker_indices.append(random.choice(self.simulation.schedulers))
                             break
                 else:
                     # Eagle
@@ -241,17 +240,6 @@ class PeriodicTimerEvent(Event):
             small_not_big_load        = str(int(10000*(1-self.simulation.free_slots_small_not_big_partition*1.0/len(self.simulation.small_not_big_partition_workers)))/100.0)
 
         print >> load_file,"total_load: " + total_load + " small_load: " + small_load + " big_load: " + big_load + " small_not_big_load: " + small_not_big_load+" current_time: " + str(current_time) 
-
-        #worker_to_switch_off = int(PERCENTAGE_WORKERS_OFF*TOTAL_WORKERS/(100*MONITOR_INTERVAL))
-        # Switch off exactly one machine if possible as a part of power conservation
-        # The machine should not be the dedicated machine for short jobs
-        if random.random() < PERCENTAGE_WORKERS_OFF:
-            for worker in self.simulation.workers:
-                if not worker.is_off and not worker.in_small_not_big:
-                    worker.is_off = True
-                    worker.switch_off_time = current_time
-                    print "Turning off worker ", worker.id
-                    break
 
         if(not self.simulation.event_queue.empty()):
             new_events.append((current_time + MONITOR_INTERVAL,self))
@@ -364,9 +352,7 @@ class ClusterStatusKeeper():
     # This node sees its own scheduled tasks if current time >= their future time.
     # This node sees other nodes' scheduled task if current time >= (their future time + NETWORK_DELAY)
     # for update to go from that worker node to all other scheduler nodes.
-    def get_workers_queue_status_delayed(self, worker_index, scheduler_index, current_time, is_off):
-        if is_off:
-            return float("inf")
+    def get_workers_queue_status_delayed(self, worker_index, scheduler_index, current_time):
         worker_estimated_time = 0
         hop = 1
         if worker_index == scheduler_index:
@@ -470,9 +456,6 @@ class Worker(object):
         self.btmap_tstamp = -1
         # Parameter to measure how long this worker is busy in the total run.
         self.busy_time = 0
-        # Parameter to indicate if worker is in power saving
-        self.is_off = False
-        self.switch_off_time = 0
 
         #Role of a scheduler?
         self.is_scheduler = True if random.random() < RATIO_SCHEDULERS_TO_WORKERS else False    
@@ -843,7 +826,7 @@ class Simulation(object):
         self.jobs = {}
         self.event_queue = Queue.PriorityQueue()
         self.workers = []
-        self.schedulers = []
+        self.scheduler_indices = []
 
         self.index_last_worker_of_small_partition = int(SMALL_PARTITION*TOTAL_WORKERS*SLOTS_PER_WORKER/100)-1
         self.index_first_worker_of_big_partition  = int((100-BIG_PARTITION)*TOTAL_WORKERS*SLOTS_PER_WORKER/100)
@@ -852,7 +835,7 @@ class Simulation(object):
             worker = Worker(self, SLOTS_PER_WORKER, len(self.workers),self.index_last_worker_of_small_partition,self.index_first_worker_of_big_partition)
             self.workers.append(worker)
             if worker.is_scheduler:
-                self.schedulers.append(worker)
+                self.scheduler_indices.append(worker.id)
 
         self.worker_indices = range(TOTAL_WORKERS)
         self.off_mean_bottom = off_mean_bottom
@@ -941,10 +924,6 @@ class Simulation(object):
             qlen          = self.cluster_status_keeper.get_workers_queue_status(index)
             worker_obj    = simulation.workers[index]
             worker_id     = index
-
-            # If machine is switched off, don't consider it any further
-            if self.workers[worker_id].is_off:
-                continue
 
             if qlen == 0 :
                 empty_nodes.append(worker_id)
@@ -1184,11 +1163,11 @@ class Simulation(object):
             ########################################################################################
             maximum_workers_needed_in_iteration = tasks_left_to_place if tasks_left_to_place <= len(self.workers) else len(self.workers) 
             sorted_workers = sorted(self.workers,
-                                    key=lambda worker:(self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, worker.is_off), random.random()))[0:maximum_workers_needed_in_iteration]
+                                    key=lambda worker:(self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time), random.random()))[0:maximum_workers_needed_in_iteration]
             # Calculate present queue lengths for these workers and take note.
             task_workers = {}
             for worker in sorted_workers:
-                task_workers[worker.id] = self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, worker.is_off)
+                task_workers[worker.id] = self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time)
 
             #### TESTING - Ensure if there are any non_long job workers, they are always ahead in the sorted list
             # If there are nodes not running long jobs, they better show up here.
@@ -1338,13 +1317,6 @@ class Simulation(object):
             total_busyness += worker.busy_time
         utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * TOTAL_WORKERS))
         print "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_WORKERS, " workers is ", utilization
-
-        # Calculate average power saved
-        power_units_saved = 0
-        for worker in self.workers:
-            if worker.is_off:
-                power_units_saved += current_time - worker.switch_off_time 
-        print "% power saved is ", 100 * float(power_units_saved/(time_elapsed_in_dc * TOTAL_WORKERS))
 
 #####################################################################################################################
 #globals
