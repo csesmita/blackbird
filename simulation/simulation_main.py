@@ -23,8 +23,6 @@ class TaskDurationDistributions:
 class EstimationErrorDistribution:
     CONSTANT, RANDOM, MEAN  = range(3)
 
-MAX_NUM_HOPS = 1
-NUM_DIRECTLY_CONNECTED_NEIGHBORS = 7 # Also the number of machines in a blast radius
 #FAILURE_PROBABILITY = 0.00001
 FAILURE_PROBABILITY = 0
 
@@ -301,8 +299,7 @@ class ProbeEvent(Event):
 #####################################################################################################################
 #####################################################################################################################
 # ClusterStatusKeeper: Keeps track of tasks assigned to workers and the 
-# estimated start time of each task. This is so that different hops can "see" 
-# different lengths of worker queues. The queue also includes currently
+# estimated start time of each task. The queue also includes currently
 # executing task at the worker.
 class ClusterStatusKeeper():
     INDEX_OF_ARRIVAL_TIME = 0
@@ -368,10 +365,11 @@ class ClusterStatusKeeper():
     # This node sees its own scheduled tasks if current time >= their future time.
     # This node sees other nodes' scheduled task if current time >= (their future time + NETWORK_DELAY)
     # for update to go from that worker node to all other scheduler nodes.
-    def get_workers_queue_status_delayed(self, worker_index, scheduler_index, current_time, hop, is_off):
+    def get_workers_queue_status_delayed(self, worker_index, scheduler_index, current_time, is_off):
         if is_off:
             return float("inf")
         worker_estimated_time = 0
+        hop = 1
         if worker_index == scheduler_index:
             hop = 0
         limit = current_time - hop * NETWORK_DELAY
@@ -1032,14 +1030,6 @@ class Simulation(object):
         assert workers_needed == len(chosen_worker_indices)
         return chosen_worker_indices
 
-    # Simulation class
-    # Returns an array denoting distance of workers from an arbitary worker node
-    # Note - this function will return 1 when MAX_NUM_HOPS = 1.
-    def get_hops(self, count):
-        node_array = numpy.logspace(1, MAX_NUM_HOPS, num=count, endpoint=True, base=NUM_DIRECTLY_CONNECTED_NEIGHBORS)
-        return [int(math.ceil(math.log(node, NUM_DIRECTLY_CONNECTED_NEIGHBORS))) for node in node_array]
-
-
     #Simulation class
     def send_probes(self, job, current_time, worker_indices, btmap):
         if SYSTEM_SIMULATED == "Hawk" or SYSTEM_SIMULATED == "IdealEagle":
@@ -1180,10 +1170,6 @@ class Simulation(object):
         # scheduler_index denotes the exactly one scheduler node ID where this job request lands.
         assert len(worker_indices) == 1
         scheduler_index = worker_indices[0]
-        # Logarthmic distribution of hops
-        hops = self.get_hops(TOTAL_WORKERS)
-        # Randomized logarthmic distribution of hops
-        hops = random.sample(hops, TOTAL_WORKERS)
         tasks_left_to_place = len(job.unscheduled_tasks)
         # Everything is a long job in Murmuration - cutoff parameter #3 is set to -1
         long_job = job.job_type_for_scheduling == BIG
@@ -1197,11 +1183,11 @@ class Simulation(object):
             ########################################################################################
             maximum_workers_needed_in_iteration = tasks_left_to_place if tasks_left_to_place <= len(self.workers) else len(self.workers) 
             sorted_workers = sorted(self.workers,
-                                    key=lambda worker:(self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, hops[worker.id], worker.is_off), random.random()))[0:maximum_workers_needed_in_iteration]
+                                    key=lambda worker:(self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, worker.is_off), random.random()))[0:maximum_workers_needed_in_iteration]
             # Calculate present queue lengths for these workers and take note.
             task_workers = {}
             for worker in sorted_workers:
-                task_workers[worker.id] = self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, hops[worker.id], worker.is_off)
+                task_workers[worker.id] = self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time, worker.is_off)
 
             #### TESTING - Ensure if there are any non_long job workers, they are always ahead in the sorted list
             # If there are nodes not running long jobs, they better show up here.
@@ -1223,8 +1209,6 @@ class Simulation(object):
             task_index = 0
             while task_index < maximum_workers_needed_in_iteration:
                 worker_id, worker_queue_length = sorted(task_workers.items(), key=operator.itemgetter(1))[0]
-                # Since none of the other schedulers account for delay in hops, ignore the hops parameter here.
-                #task_arrival_time = current_time + hops[worker_id] * NETWORK_DELAY
                 task_arrival_time = current_time + NETWORK_DELAY
                 task_arrival_events.append((task_arrival_time,
                      ProbeEvent(self.workers[worker_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
