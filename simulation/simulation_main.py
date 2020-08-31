@@ -23,6 +23,8 @@ class TaskDurationDistributions:
 class EstimationErrorDistribution:
     CONSTANT, RANDOM, MEAN  = range(3)
 
+RATIO_SCHEDULERS_TO_WORKERS = 0.1
+
 class Job(object):
     job_count = 1
     per_job_task_info = {}
@@ -472,6 +474,9 @@ class Worker(object):
         self.is_off = False
         self.switch_off_time = 0
 
+        #Role of a scheduler?
+        self.is_scheduler = True if random.random() < RATIO_SCHEDULERS_TO_WORKERS else False    
+
     #Worker class
     def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap, handle_stealing):
         global stats
@@ -838,12 +843,17 @@ class Simulation(object):
         self.jobs = {}
         self.event_queue = Queue.PriorityQueue()
         self.workers = []
+        self.schedulers = []
 
         self.index_last_worker_of_small_partition = int(SMALL_PARTITION*TOTAL_WORKERS*SLOTS_PER_WORKER/100)-1
         self.index_first_worker_of_big_partition  = int((100-BIG_PARTITION)*TOTAL_WORKERS*SLOTS_PER_WORKER/100)
 
         while len(self.workers) < TOTAL_WORKERS:
-            self.workers.append(Worker(self, SLOTS_PER_WORKER, len(self.workers),self.index_last_worker_of_small_partition,self.index_first_worker_of_big_partition))
+            worker = Worker(self, SLOTS_PER_WORKER, len(self.workers),self.index_last_worker_of_small_partition,self.index_first_worker_of_big_partition)
+            self.workers.append(worker)
+            if worker.is_scheduler:
+                self.schedulers.append(worker)
+
         self.worker_indices = range(TOTAL_WORKERS)
         self.off_mean_bottom = off_mean_bottom
         self.off_mean_top = off_mean_top
