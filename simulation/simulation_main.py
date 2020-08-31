@@ -23,9 +23,6 @@ class TaskDurationDistributions:
 class EstimationErrorDistribution:
     CONSTANT, RANDOM, MEAN  = range(3)
 
-#FAILURE_PROBABILITY = 0.00001
-FAILURE_PROBABILITY = 0
-
 class Job(object):
     job_count = 1
     per_job_task_info = {}
@@ -653,13 +650,12 @@ class Worker(object):
 
         was_successful = True
         task_status = True
-        failed_after_time = 0
         if len(self.simulation.jobs[job_id].unscheduled_tasks) == 0 :
             get_task_response_time = current_time + 2 * NETWORK_DELAY
             was_successful = False
             events = [(get_task_response_time, NoopGetTaskResponseEvent(self))]
         else :
-            task_status, failed_after_time, events = self.simulation.get_task(job_id, self, current_time, probe_arrival_time)
+            task_status, events = self.simulation.get_task(job_id, self, current_time, probe_arrival_time)
 
         job_bydef_big = (self.simulation.jobs[job_id].job_type_for_comparison == BIG)
        
@@ -680,11 +676,6 @@ class Worker(object):
                 if(self.in_big):
                     stats.STATS_STICKY_EXECUTIONS_IN_BP +=1
             self.queued_probes[pos][4] = True
-
-        if(not task_status):
-            print " Task for job ", job_id," failed." 
-            #Task unexpectedly failed during or after probe arrival at worker
-            self.queued_probes[pos][6] += failed_after_time
 
         if(SBP_ENABLED==False or not was_successful or job_bydef_big):
             #so the probe remains if SBP is on, task was succesful and is small
@@ -1258,23 +1249,6 @@ class Simulation(object):
         task_duration = job.unscheduled_tasks.pop()
         worker.busy_time += task_duration
         task_completion_time = task_duration + get_task_response_time
-        
-        # Fault injection
-        failure_list = []
-        failure_list.append(self.get_failure_status(scheduler_algorithm_time))
-        failure_list.append(self.get_failure_status(task_wait_time))
-        failure_list.append(self.get_failure_status(task_duration))
-        failure_list.append(self.get_failure_status(response_time))
-        if True in [failure_list[i][0] for i in range(0,len(failure_list))]:
-            # The task has failed at some point before responding to scheduler with a success.
-            failed_after = 0
-            for status,duration in failure_list:
-                if status == True:
-                    break
-                failed_after += duration
-            # Tell the scheduler to retry the probe
-            return False, failed_after, []
-                
         #print current_time, " worker:", worker.id, " task from job ", job_id, " task duration: ", task_duration, " will finish at time ", task_completion_time
         is_job_complete = job.update_task_completion_details(task_completion_time)
 
@@ -1291,7 +1265,7 @@ class Simulation(object):
         if len(job.unscheduled_tasks) == 0:
             logging.info("Finished scheduling tasks for job %s" % job.id)
 
-        return True, 0, events
+        return True, events
 
 
     #Simulation class
@@ -1301,12 +1275,6 @@ class Simulation(object):
         elif (STEALING_STRATEGY == "RANDOM"):       probes = self.workers[worker_index].get_probes_random(current_time, free_worker_id)
 
         return worker_index,probes
-
-    #Simulation class
-    def get_failure_status(self, duration):
-        status = True if random.random() < FAILURE_PROBABILITY else False
-        return [status, duration]
-
 
     #Simulation class
     def run(self):
