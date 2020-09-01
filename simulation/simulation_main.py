@@ -158,7 +158,7 @@ class JobArrival(Event, file):
         if not long_job:
             # Short job schedulers
             #print current_time, ": Short Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
-            rnd_worker_in_big_partition = random.randint(self.simulation.index_first_worker_of_big_partition, len(self.simulation.workers)-1)
+            rnd_worker_in_big_partition = random.choice(list(self.simulation.big_partition_workers_hash.keys()))
             self.simulation.hash_jobid_to_node[self.job.id]=rnd_worker_in_big_partition
 
             if SYSTEM_SIMULATED == "Hawk" or SYSTEM_SIMULATED == "Eagle":
@@ -167,7 +167,6 @@ class JobArrival(Event, file):
                 possible_worker_indices = self.simulation.get_list_non_long_job_workers_from_btmap(self.simulation.cluster_status_keeper.get_btmap())
 
             worker_indices = self.simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, possible_worker_indices,MIN_NR_PROBES)
-
         else:
             # Long job schedulers
             #print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
@@ -193,9 +192,7 @@ class JobArrival(Event, file):
                     # worker_indices for Murmuration only indicates the
                     # scheduler. send_probes() does both worker selection and
                     # sending probe requests.
-                    for scheduler in self.simulation.schedulers:
-                            worker_indices.append(random.choice(self.simulation.schedulers))
-                            break
+                    worker_indices.append(random.choice(self.simulation.schedulers))
                 else:
                     # Eagle
                     possible_workers = self.simulation.big_partition_workers_hash
@@ -458,7 +455,7 @@ class Worker(object):
         self.busy_time = 0
 
         #Role of a scheduler?
-        self.is_scheduler = True if random.random() < RATIO_SCHEDULERS_TO_WORKERS else False    
+        self.has_schedulers = True if random.random() < RATIO_SCHEDULERS_TO_WORKERS else False    
 
     #Worker class
     def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap, handle_stealing):
@@ -828,13 +825,16 @@ class Simulation(object):
         self.workers = []
         self.scheduler_indices = []
 
+        #Do not work with indexes. This is because small and big partition
+        #workers may not always be contiguous. Change logic here to store
+        #indices instead.
         self.index_last_worker_of_small_partition = int(SMALL_PARTITION*TOTAL_WORKERS*SLOTS_PER_WORKER/100)-1
         self.index_first_worker_of_big_partition  = int((100-BIG_PARTITION)*TOTAL_WORKERS*SLOTS_PER_WORKER/100)
 
         while len(self.workers) < TOTAL_WORKERS:
             worker = Worker(self, SLOTS_PER_WORKER, len(self.workers),self.index_last_worker_of_small_partition,self.index_first_worker_of_big_partition)
             self.workers.append(worker)
-            if worker.is_scheduler:
+            if worker.has_schedulers:
                 self.scheduler_indices.append(worker.id)
 
         self.worker_indices = range(TOTAL_WORKERS)
@@ -918,7 +918,6 @@ class Simulation(object):
         chosen_worker_indices = []
         workers_needed = num_tasks
         prio_queue = Queue.PriorityQueue()
-
         empty_nodes = []  #performance optimization
         for index in hash_workers_considered:
             qlen          = self.cluster_status_keeper.get_workers_queue_status(index)
@@ -1151,7 +1150,6 @@ class Simulation(object):
         assert len(worker_indices) == 1
         scheduler_index = worker_indices[0]
         tasks_left_to_place = len(job.unscheduled_tasks)
-        # Everything is a long job in Murmuration - cutoff parameter #3 is set to -1
         long_job = job.job_type_for_scheduling == BIG
         while True:
             # Sort all workers in this DC according to their queue lengths.
@@ -1259,7 +1257,7 @@ class Simulation(object):
 
     #Simulation class
     def get_probes(self, current_time, free_worker_id):
-        worker_index = random.randint(self.index_first_worker_of_big_partition, len(self.workers)-1)
+        worker_index = random.choice(list(self.big_partition_workers_hash.keys()))
         if     (STEALING_STRATEGY ==  "ATC"):       probes = self.workers[worker_index].get_probes_atc(current_time, free_worker_id)
         elif (STEALING_STRATEGY == "RANDOM"):       probes = self.workers[worker_index].get_probes_random(current_time, free_worker_id)
 
