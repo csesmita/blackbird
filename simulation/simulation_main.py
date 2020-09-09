@@ -192,7 +192,7 @@ class JobArrival(Event, file):
                     # worker_indices for Murmuration only indicates the
                     # scheduler. send_probes() does both worker selection and
                     # sending probe requests.
-                    worker_indices.append(random.choice(self.simulation.schedulers))
+                    worker_indices.append(random.choice(self.simulation.scheduler_indices))
                 else:
                     # Eagle
                     possible_workers = self.simulation.big_partition_workers_hash
