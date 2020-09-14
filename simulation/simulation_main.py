@@ -156,21 +156,17 @@ class JobArrival(Event, file):
         long_job = self.job.job_type_for_scheduling == BIG
         worker_indices = []
         btmap = None
-
-        #TODO - Remove on support for short jobs in Murmurtion
-        if not long_job and SYSTEM_SIMULATED == "Murmuration":
-            # Creating a new Job Arrival event for the next job in the trace
-            line = self.jobs_file.readline()
-            if (line == ''):
-                self.simulation.scheduled_last_job = True
-                return new_events
-            self.job = Job(self.task_distribution, line, self.job.estimate_distribution, self.job.off_mean_bottom, self.job.off_mean_top)
-            new_events.append((self.job.start_time, self))
-            self.simulation.jobs_scheduled += 1
-            return new_events
-
-        if not long_job:
-            ### TODO - Add support for short jobs in Murmuration here.
+        if (SYSTEM_SIMULATED == "Murmuration"):
+            # Short or long job, find a random scheduler node for
+            # landing the job request. Note - worker queue status
+            # should be updated when a decision on workers is made.
+            # worker_indices for Murmuration only indicates the
+            # scheduler. send_probes() does both worker selection and
+            # sending probe requests.
+            # TODO - Follow the pattern of rest of the schedulers and 
+            # have the worker selection logic here.
+            worker_indices.append(random.choice(self.simulation.scheduler_indices))
+        elif not long_job:
             # Short job schedulers
             #print current_time, ": Short Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
             rnd_worker_in_big_partition = random.choice(list(self.simulation.big_partition_workers_hash.keys()))
@@ -200,16 +196,6 @@ class JobArrival(Event, file):
                     possible_workers = self.simulation.small_partition_workers_hash
                     worker_indices = self.simulation.find_workers_long_job_prio(self.job.num_tasks, self.job.estimated_task_duration, current_time, self.simulation, possible_workers)
                     self.simulation.cluster_status_keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration, self.job.id, current_time)
-                elif (SYSTEM_SIMULATED == "Murmuration"):
-                    # Short or long job, find a random scheduler node for
-                    # landing the job request. Note - worker queue status
-                    # should be updated when a decision on workers is made.
-                    # worker_indices for Murmuration only indicates the
-                    # scheduler. send_probes() does both worker selection and
-                    # sending probe requests.
-                    # TODO - Follow the pattern of rest of the schedulers and 
-                    # have the worker selection logic here.
-                    worker_indices.append(random.choice(self.simulation.scheduler_indices))
                 else:
                     # Eagle
                     possible_workers = self.simulation.big_partition_workers_hash
@@ -960,10 +946,15 @@ class Simulation(object):
     #Simulation class
     def find_workers_random(self, probe_ratio, nr_tasks, possible_worker_indices, min_probes):
         chosen_worker_indices = []
+        if possible_worker_indices is []:
+            print "Empty possible_worker_indices!!"
         nr_probes = max(probe_ratio*nr_tasks,min_probes)
         for it in range(0,nr_probes):
-            rnd_index = random.randint(0,len(possible_worker_indices)-1)
-            chosen_worker_indices.append(possible_worker_indices[rnd_index])
+            try:
+                rnd_index = random.randint(0,len(possible_worker_indices)-1)
+                chosen_worker_indices.append(possible_worker_indices[rnd_index])
+            except ValueError:
+                print "Hit ValueError Exception. possible_worker_indices is ", possible_worker_indices
         return chosen_worker_indices
 
 
@@ -1225,14 +1216,13 @@ class Simulation(object):
         scheduler.increment_job_type_counter(long_job)
         tasks_left_to_place = len(job.unscheduled_tasks)
         job.scheduled_by = scheduler
+        btmap = self.cluster_status_keeper.get_btmap()
         if long_job:
             # Sort all workers running long jobs in this DC according to their queue lengths.
             # Ranking policy used - Least loaded node AMONG ELIGIBLE NODES
             # TODO - Change this to best fit node, by changing the number of slots per worker.
             # TODO - Do this just once to simulate the resource table and store a local copy to work with.
             # btmap indicates workers where long jobs are running
-            btmap = self.cluster_status_keeper.get_btmap()
-            possible_worker_indices = set(btmap.nonzero())
 
             ##### NEW NODE CHECK #####
             # First check if nodes not yet running a long job can run one now.
@@ -1242,6 +1232,7 @@ class Simulation(object):
             # do not have information on short jobs scheduled by other schedulers.
             # Ceil ensures atleast one node.
             # TODO - Does this logic need to factor in the number of tasks as well, or will just the number of jobs do? 
+            possible_worker_indices = set(btmap.nonzero())
             count_long_jobs_running = self.get_count_jobs(True)
             count_short_jobs_running = scheduler.short_jobs_counter * len(self.scheduler_indices)
             max_long_jobs_nodes = 1
@@ -1252,7 +1243,8 @@ class Simulation(object):
             if current_long_job_nodes < max_long_jobs_nodes:
                 #TODO - Re-visit allocation of nodes for long jobs given the delta.
                 #Randomly consider workers not yet running a long job
-                num_allowed = int(math.ceil((max_long_jobs_nodes - current_long_job_nodes) / 2))
+                #Always take the floor, it should never run so tight!
+                num_allowed = int(math.floor((max_long_jobs_nodes - current_long_job_nodes) / 2))
                 candidate_workers = set(range(TOTAL_WORKERS))
                 if btmap is not []:
                     candidate_workers = candidate_workers - set(btmap.nonzero())
@@ -1288,7 +1280,10 @@ class Simulation(object):
             return task_arrival_events
 
         # This is for handling short jobs
-        #TODO - Handle short jobs
+        possible_worker_indices = list(set(range(TOTAL_WORKERS)) - set(btmap.nonzero()))
+        worker_indices = self.find_workers_random(PROBE_RATIO, job.num_tasks, possible_worker_indices, MIN_NR_PROBES)
+        for worker_index in worker_indices:
+            task_arrival_events.append((current_time + NETWORK_DELAY, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
         return task_arrival_events
 
 
