@@ -77,6 +77,8 @@ class Job(object):
 
         self.probed_workers = set()
         self.remaining_exec_time = self.estimated_task_duration*len(self.unscheduled_tasks)
+        # Remember the scheduler that scheduled this job
+        self.scheduled_by = None
 
     #Job class
     """ Returns true if the job has completed, and false otherwise. """
@@ -155,7 +157,20 @@ class JobArrival(Event, file):
         worker_indices = []
         btmap = None
 
+        #TODO - Remove on support for short jobs in Murmurtion
+        if not long_job and SYSTEM_SIMULATED == "Murmuration":
+            # Creating a new Job Arrival event for the next job in the trace
+            line = self.jobs_file.readline()
+            if (line == ''):
+                self.simulation.scheduled_last_job = True
+                return new_events
+            self.job = Job(self.task_distribution, line, self.job.estimate_distribution, self.job.off_mean_bottom, self.job.off_mean_top)
+            new_events.append((self.job.start_time, self))
+            self.simulation.jobs_scheduled += 1
+            return new_events
+
         if not long_job:
+            ### TODO - Add support for short jobs in Murmuration here.
             # Short job schedulers
             #print current_time, ": Short Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
             rnd_worker_in_big_partition = random.choice(list(self.simulation.big_partition_workers_hash.keys()))
@@ -188,10 +203,12 @@ class JobArrival(Event, file):
                 elif (SYSTEM_SIMULATED == "Murmuration"):
                     # Short or long job, find a random scheduler node for
                     # landing the job request. Note - worker queue status
-                    # should be updated when a decision for workers is made.
+                    # should be updated when a decision on workers is made.
                     # worker_indices for Murmuration only indicates the
                     # scheduler. send_probes() does both worker selection and
                     # sending probe requests.
+                    # TODO - Follow the pattern of rest of the schedulers and 
+                    # have the worker selection logic here.
                     worker_indices.append(random.choice(self.simulation.scheduler_indices))
                 else:
                     # Eagle
@@ -236,7 +253,7 @@ class PeriodicTimerEvent(Event):
         if(len(self.simulation.small_not_big_partition_workers)!=0):
             small_not_big_load        = str(int(10000*(1-self.simulation.free_slots_small_not_big_partition*1.0/len(self.simulation.small_not_big_partition_workers)))/100.0)
 
-        print >> load_file,"total_load: " + total_load + " small_load: " + small_load + " big_load: " + big_load + " small_not_big_load: " + small_not_big_load+" current_time: " + str(current_time) 
+        #print >> load_file,"total_load: " + total_load + " small_load: " + small_load + " big_load: " + big_load + " small_not_big_load: " + small_not_big_load+" current_time: " + str(current_time) 
 
         if(not self.simulation.event_queue.empty()):
             new_events.append((current_time + MONITOR_INTERVAL,self))
@@ -329,14 +346,16 @@ class ClusterStatusKeeper():
             if increase:
                 # Append (arrival_time_at_worker, task_duration, job_id) to the end of tasks list
                 tasks.append([arrival_time_at_worker, duration, job_id])
+                #print "Appending task entry", duration, job_id," to worker_queue at worker", worker
                 self.btmap.set(worker)
             else:
-                # Search for the first entry with this task_duration and pop the task
+                # Search for the first entry with this (task_duration, jobid) and pop the task
                 original_task_queue_length = len(tasks)
                 task_index = 0
                 while task_index < original_task_queue_length:
                     if tasks[task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION] == duration and tasks[task_index][ClusterStatusKeeper.INDEX_OF_JOB_ID] == job_id:
                         # Delete this task entry and finish
+                        #print "Popping task entry", duration, job_id, " from worker_queue at worker", worker
                         tasks.pop(task_index)
                         break
                     task_index += 1
@@ -349,19 +368,22 @@ class ClusterStatusKeeper():
     # This node sees its own scheduled tasks if current time >= their future time.
     # This node sees other nodes' scheduled task if current time >= (their future time + NETWORK_DELAY)
     # for update to go from that worker node to all other scheduler nodes.
-    def get_workers_queue_status_delayed(self, worker_index, scheduler_index, current_time):
-        worker_estimated_time = 0
-        hop = 1
-        if worker_index == scheduler_index:
-            hop = 0
-        limit = current_time - hop * NETWORK_DELAY
-        task_index = 0
-        while task_index < len(self.worker_queues[worker_index]):
-            arrival_time = self.worker_queues[worker_index][task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME]
-            if arrival_time <= limit:
-                worker_estimated_time += self.worker_queues[worker_index][task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION]
-            task_index += 1
-        return worker_estimated_time
+    def get_workers_queue_status_delayed(self, worker_indices, scheduler_index, current_time):
+        workers_estimated_times = {}
+        for worker_index in worker_indices:
+            worker_estimated_time = 0
+            hop = 1
+            if worker_index == scheduler_index:
+                hop = 0
+            limit = current_time - hop * NETWORK_DELAY
+            task_index = 0
+            while task_index < len(self.worker_queues[worker_index]):
+                arrival_time = self.worker_queues[worker_index][task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME]
+                if arrival_time <= limit:
+                    worker_estimated_time += self.worker_queues[worker_index][task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION]
+                task_index += 1
+            workers_estimated_times[worker_index] = worker_estimated_time
+        return workers_estimated_times.items()
 
 #####################################################################################################################
 #####################################################################################################################
@@ -455,7 +477,9 @@ class Worker(object):
         self.busy_time = 0
 
         #Role of a scheduler?
-        self.has_schedulers = True if random.random() < RATIO_SCHEDULERS_TO_WORKERS else False    
+        self.scheduler = None
+        if random.random() < RATIO_SCHEDULERS_TO_WORKERS:
+            self.scheduler = Scheduler()
 
     #Worker class
     def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap, handle_stealing):
@@ -809,8 +833,38 @@ class Worker(object):
             self.queued_probes[delay_it][3] = new_acc_delay
 
         return position_in_queue
-  
 
+        
+
+class Scheduler(object):
+    def __init__(self):
+        self.long_jobs_counter = 0
+        self.short_jobs_counter = 0
+   
+    # Scheduler class
+    # The next two functions keep track of job types currently being serviced
+    def increment_job_type_counter(self, is_long):
+        if is_long:
+            self.long_jobs_counter += 1
+        else:
+            self.short_jobs_counter += 1
+
+    # Scheduler class
+    def decrement_job_type_counter(self, is_long):
+        if is_long:
+            self.long_jobs_counter -= 1
+        else:
+            self.short_jobs_counter -= 1
+
+        assert(self.long_jobs_counter >= 0)
+        assert(self.short_jobs_counter >= 0)
+
+    # Scheduler class
+    def get_job_type_counter(self, is_long):
+        if is_long:
+            return self.long_jobs_counter
+        else:
+            return self.short_jobs_counter
 #####################################################################################################################
 #####################################################################################################################
 
@@ -834,7 +888,8 @@ class Simulation(object):
         while len(self.workers) < TOTAL_WORKERS:
             worker = Worker(self, SLOTS_PER_WORKER, len(self.workers),self.index_last_worker_of_small_partition,self.index_first_worker_of_big_partition)
             self.workers.append(worker)
-            if worker.has_schedulers:
+            if worker.scheduler is not None:
+                # Directly access scheduler indices in Simulation class
                 self.scheduler_indices.append(worker.id)
 
         self.worker_indices = range(TOTAL_WORKERS)
@@ -1140,66 +1195,100 @@ class Simulation(object):
         return probe_events
 
     # Simulation class
+    def get_count_jobs(self, is_long):
+        count_jobs = 0
+        for worker in self.workers:
+            if worker.scheduler is not None:
+                if is_long:
+                    count_jobs += worker.scheduler.long_jobs_counter
+                else:
+                    count_jobs += worker.scheduler.short_jobs_counter
+        return count_jobs
+
+    # Simulation class
     # Contains optimization to sort workers just once
     def send_probes_murmuration(self, job, current_time, worker_indices, btmap):
         global stats
         self.jobs[job.id] = job
-        #print "Number of unscheduled tasks for job id ", job.id," is ", len(job.unscheduled_tasks)
         task_arrival_events = []
+
         # scheduler_index denotes the exactly one scheduler node ID where this job request lands.
-        assert len(worker_indices) == 1
         scheduler_index = worker_indices[0]
-        tasks_left_to_place = len(job.unscheduled_tasks)
+        scheduler = self.workers[scheduler_index].scheduler
+
+        # Some safety checks
+        assert len(worker_indices) == 1
+        assert scheduler is not None
+
         long_job = job.job_type_for_scheduling == BIG
-        while True:
-            # Sort all workers in this DC according to their queue lengths.
-            # Do this just once to simulate the resource table and store a local copy to work with
-            # Ranking policy used - Least loaded node
-            # Take the first N least loaded workers, where N is number of tasks for this iteration.
-            ########################################################################################
-            # For all tasks of this job, try to assign as many tasks to a worker node as possible.
-            ########################################################################################
-            maximum_workers_needed_in_iteration = tasks_left_to_place if tasks_left_to_place <= len(self.workers) else len(self.workers) 
-            sorted_workers = sorted(self.workers,
-                                    key=lambda worker:(self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time), random.random()))[0:maximum_workers_needed_in_iteration]
-            # Calculate present queue lengths for these workers and take note.
-            task_workers = {}
-            for worker in sorted_workers:
-                task_workers[worker.id] = self.cluster_status_keeper.get_workers_queue_status_delayed(worker.id, scheduler_index, current_time)
-
-            #### TESTING - Ensure if there are any non_long job workers, they are always ahead in the sorted list
-            # If there are nodes not running long jobs, they better show up here.
-            # This assert may have a genuine reason to fail - when the bit has been flipped after TaskEndEvent
-            # occuring between now and propagation delay to that node.
-            '''
-            non_long_job_workers = []
+        # Increment the counter for long or short job
+        scheduler.increment_job_type_counter(long_job)
+        tasks_left_to_place = len(job.unscheduled_tasks)
+        job.scheduled_by = scheduler
+        if long_job:
+            # Sort all workers running long jobs in this DC according to their queue lengths.
+            # Ranking policy used - Least loaded node AMONG ELIGIBLE NODES
+            # TODO - Change this to best fit node, by changing the number of slots per worker.
+            # TODO - Do this just once to simulate the resource table and store a local copy to work with.
+            # btmap indicates workers where long jobs are running
             btmap = self.cluster_status_keeper.get_btmap()
-            for worker in sorted_workers:
-                if not btmap.test(worker.id):
-                    non_long_job_workers.append(worker)
-            assert set(non_long_job_workers) - set(sorted_workers) == set()
-            '''
-            #### TESTING
+            possible_worker_indices = set(btmap.nonzero())
 
-            #print "Task worker ", sorted_workers[0].id," queue length at time", current_time," is ", task_workers[sorted_workers[0]]    
-            #print "Task worker ", sorted_workers[1].id, " queue length  at time", current_time," is ", task_workers[sorted_workers[1]]    
-            # Schedule tasks
-            task_index = 0
-            while task_index < maximum_workers_needed_in_iteration:
-                worker_id, worker_queue_length = sorted(task_workers.items(), key=operator.itemgetter(1))[0]
-                task_arrival_time = current_time + NETWORK_DELAY
-                task_arrival_events.append((task_arrival_time,
-                     ProbeEvent(self.workers[worker_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
-                # Update the local copy of queue lengths
-                task_workers[worker_id] = worker_queue_length + job.estimated_task_duration
-                task_index += 1
-                # Only update the cluster status for long jobs
-                if self.SCHEDULE_BIG_CENTRALIZED:
+            ##### NEW NODE CHECK #####
+            # First check if nodes not yet running a long job can run one now.
+            # For this, the ratio of nodes running long jobs versus running short jobs
+            # = (all long jobs seen by all schedulers) / (number of schedulers * number of short jobs seen on this scheduler)
+            # For short jobs, schedulers can only approximate, since they
+            # do not have information on short jobs scheduled by other schedulers.
+            # Ceil ensures atleast one node.
+            # TODO - Does this logic need to factor in the number of tasks as well, or will just the number of jobs do? 
+            count_long_jobs_running = self.get_count_jobs(True)
+            count_short_jobs_running = scheduler.short_jobs_counter * len(self.scheduler_indices)
+            max_long_jobs_nodes = 1
+            if count_long_jobs_running + count_short_jobs_running > 0:
+                max_long_jobs_nodes = math.ceil(count_long_jobs_running * TOTAL_WORKERS / (count_long_jobs_running + count_short_jobs_running))
+            current_long_job_nodes = btmap.count()
+            new_long_node_workers = []
+            if current_long_job_nodes < max_long_jobs_nodes:
+                #TODO - Re-visit allocation of nodes for long jobs given the delta.
+                #Randomly consider workers not yet running a long job
+                num_allowed = int(math.ceil((max_long_jobs_nodes - current_long_job_nodes) / 2))
+                candidate_workers = set(range(TOTAL_WORKERS))
+                if btmap is not []:
+                    candidate_workers = candidate_workers - set(btmap.nonzero())
+                new_long_node_workers = random.sample(candidate_workers, num_allowed)
+                possible_worker_indices |= set(new_long_node_workers)
+            ##### NEW NODE CHECK #####
+
+            while True:
+                # On every iteration, place tasks on N least loaded workers, where N is the max of nodes and number of tasks.
+                maximum_workers_needed_in_iteration = tasks_left_to_place if tasks_left_to_place <= len(possible_worker_indices) else len(possible_worker_indices)
+                #Logic for sorting nodes hosting long jobs only.
+                sorted_workers = sorted(self.cluster_status_keeper.get_workers_queue_status_delayed(possible_worker_indices, scheduler_index, current_time), key = lambda kv:(kv[1], kv[0]))[0:maximum_workers_needed_in_iteration]
+
+                # Schedule tasks
+                task_index = 0
+                while task_index < maximum_workers_needed_in_iteration:
+                    worker_id, worker_queue_length = sorted_workers[0]
+                    task_arrival_time = current_time + NETWORK_DELAY
+                    task_arrival_events.append((task_arrival_time,
+                         ProbeEvent(self.workers[worker_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+                    # Update the local copy of queue lengths
+                    sorted_workers[0] = (worker_id, worker_queue_length + job.estimated_task_duration)
+                    sorted_workers = sorted(sorted_workers, key=operator.itemgetter(1))
+                    task_index += 1
+                    # Update the cluster status for long jobs
                     self.cluster_status_keeper.update_workers_queue([worker_id], True, job.estimated_task_duration, job.id, task_arrival_time)
 
-            tasks_left_to_place -= maximum_workers_needed_in_iteration
-            if tasks_left_to_place == 0:
-               break
+                tasks_left_to_place -= maximum_workers_needed_in_iteration
+                if tasks_left_to_place == 0:
+                   break
+   
+            # Return task arrival events for long jobs
+            return task_arrival_events
+
+        # This is for handling short jobs
+        #TODO - Handle short jobs
         return task_arrival_events
 
 
@@ -1243,6 +1332,10 @@ class Simulation(object):
             self.jobs_completed += 1;
             # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time + Worker queue wait time + Task processing time
             print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job_id, " scheduler_algorithm_time ", scheduler_algorithm_time, " task_wait_time ", task_wait_time, " task_processing_time ", task_duration
+
+            #Decrement appropriate counters at original scheduler
+            assert(job.scheduled_by is not None)
+            job.scheduled_by.decrement_job_type_counter(job.job_type_for_scheduling == BIG)
 
         events.append((task_completion_time, TaskEndEvent(worker, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, job.estimated_task_duration, this_task_id)))
         
