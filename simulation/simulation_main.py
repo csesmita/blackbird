@@ -180,7 +180,7 @@ class JobArrival(Event, file):
             worker_indices = self.simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, possible_worker_indices,MIN_NR_PROBES)
         else:
             # Long job schedulers
-            #print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
+            print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
             btmap = self.simulation.cluster_status_keeper.get_btmap()
 
             if (SYSTEM_SIMULATED == "DLWL"):
@@ -245,7 +245,6 @@ class PeriodicTimerEvent(Event):
             new_events.append((current_time + MONITOR_INTERVAL,self))
         return new_events
 
-
 #####################################################################################################################
 #####################################################################################################################
 #####################################################################################################################
@@ -257,12 +256,13 @@ class WorkerHeartbeatEvent(Event):
 
     def run(self, current_time):
         new_events = []
+        # shared_cluster_status is only used in DLWL
         if(HEARTBEAT_DELAY == 0):
             self.simulation.shared_cluster_status = self.simulation.cluster_status_keeper.get_queue_status()
         else:
             self.simulation.shared_cluster_status = copy.deepcopy(self.simulation.cluster_status_keeper.get_queue_status()) 
-     
-        if(HEARTBEAT_DELAY != 0): 
+
+        if(HEARTBEAT_DELAY != 0):
             if(self.simulation.jobs_completed != self.simulation.jobs_scheduled or self.simulation.scheduled_last_job == False):
                 new_events.append((current_time + HEARTBEAT_DELAY,self))
 
@@ -825,32 +825,35 @@ class Worker(object):
 class Scheduler(object):
     def __init__(self):
         self.long_jobs_counter = 0
-        self.short_jobs_counter = 0
-   
+        self.total_jobs_counter = 0
+        self.job_counter_buckets = [0 for i in range(JOB_COUNTERS_NUM_BUCKETS)]
+  
     # Scheduler class
-    # The next two functions keep track of job types currently being serviced
+    # This function increments job counters and stores them in buckets if
+    # required samples are collected.
     def increment_job_type_counter(self, is_long):
+        self.total_jobs_counter += 1
         if is_long:
             self.long_jobs_counter += 1
-        else:
-            self.short_jobs_counter += 1
+
+        if self.total_jobs_counter == JOB_COUNTERS_NUM_SAMPLES_PER_BUCKET:
+            # Shift buckets to make space
+            for i in range(1, JOB_COUNTERS_NUM_BUCKETS):
+                self.job_counter_buckets[i - 1] = self.job_counter_buckets[i]
+            # Calculate latest sample
+            self.job_counter_buckets[JOB_COUNTERS_NUM_BUCKETS - 1] = self.long_jobs_counter  / self.total_jobs_counter
+            # Reset counters
+            self.reset_job_type_counter()
+
 
     # Scheduler class
-    def decrement_job_type_counter(self, is_long):
-        if is_long:
-            self.long_jobs_counter -= 1
-        else:
-            self.short_jobs_counter -= 1
-
-        assert(self.long_jobs_counter >= 0)
-        assert(self.short_jobs_counter >= 0)
+    def reset_job_type_counter(self):
+        self.total_jobs_counter = 0
+        self.long_jobs_counter = 0
 
     # Scheduler class
-    def get_job_type_counter(self, is_long):
-        if is_long:
-            return self.long_jobs_counter
-        else:
-            return self.short_jobs_counter
+    def get_job_type_counter(self):
+        return (self.total_jobs_counter, self.long_jobs_counter)
 #####################################################################################################################
 #####################################################################################################################
 
@@ -950,11 +953,8 @@ class Simulation(object):
             print "Empty possible_worker_indices!!"
         nr_probes = max(probe_ratio*nr_tasks,min_probes)
         for it in range(0,nr_probes):
-            try:
-                rnd_index = random.randint(0,len(possible_worker_indices)-1)
-                chosen_worker_indices.append(possible_worker_indices[rnd_index])
-            except ValueError:
-                print "Hit ValueError Exception. possible_worker_indices is ", possible_worker_indices
+            rnd_index = random.randint(0,len(possible_worker_indices)-1)
+            chosen_worker_indices.append(possible_worker_indices[rnd_index])
         return chosen_worker_indices
 
 
@@ -1195,6 +1195,31 @@ class Simulation(object):
                 else:
                     count_jobs += worker.scheduler.short_jobs_counter
         return count_jobs
+ 
+    # Simulation class
+    # This function calculates the weighted average of long jobs to total jobs
+    # TODO - Optimize - needn't be called for every job
+    def get_weighted_avg(self):
+        long_jobs_weight = 0.0
+        long_jobs_weight_from_counters = 0.0
+        count = 0
+        for scheduler_index in self.scheduler_indices:
+            scheduler = self.workers[scheduler_index].scheduler
+            for i in range(JOB_COUNTERS_NUM_BUCKETS):
+                long_jobs_weight +=  (i + 1) * scheduler.job_counter_buckets[i]
+
+            total_jobs, long_jobs = scheduler.get_job_type_counter()
+            if total_jobs > 0:
+                long_jobs_weight_from_counters += float(long_jobs) / float(total_jobs)
+                count += 1
+        total_weights = float(len(self.scheduler_indices) * JOB_COUNTERS_NUM_BUCKETS * (JOB_COUNTERS_NUM_BUCKETS + 1) / 2.0)
+        nodes = math.ceil(TOTAL_WORKERS * long_jobs_weight / total_weights)
+        if nodes > 0.0:
+            return nodes
+        #Insufficient data points yet
+        return math.ceil(TOTAL_WORKERS * long_jobs_weight_from_counters / float(count))
+
+
 
     # Simulation class
     # Contains optimization to sort workers just once
@@ -1233,18 +1258,14 @@ class Simulation(object):
             # Ceil ensures atleast one node.
             # TODO - Does this logic need to factor in the number of tasks as well, or will just the number of jobs do? 
             possible_worker_indices = set(btmap.nonzero())
-            count_long_jobs_running = self.get_count_jobs(True)
-            count_short_jobs_running = scheduler.short_jobs_counter * len(self.scheduler_indices)
-            max_long_jobs_nodes = 1
-            if count_long_jobs_running + count_short_jobs_running > 0:
-                max_long_jobs_nodes = math.ceil(count_long_jobs_running * TOTAL_WORKERS / (count_long_jobs_running + count_short_jobs_running))
+            max_long_jobs_nodes = max(self.get_weighted_avg(), 1)
             current_long_job_nodes = btmap.count()
             new_long_node_workers = []
             if current_long_job_nodes < max_long_jobs_nodes:
                 #TODO - Re-visit allocation of nodes for long jobs given the delta.
                 #Randomly consider workers not yet running a long job
                 #Always take the floor, it should never run so tight!
-                num_allowed = int(math.floor((max_long_jobs_nodes - current_long_job_nodes) / 2))
+                num_allowed = int(math.ceil((max_long_jobs_nodes - current_long_job_nodes) / 2.0))
                 candidate_workers = set(range(TOTAL_WORKERS))
                 if btmap is not []:
                     candidate_workers = candidate_workers - set(btmap.nonzero())
@@ -1327,10 +1348,6 @@ class Simulation(object):
             self.jobs_completed += 1;
             # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time + Worker queue wait time + Task processing time
             print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job_id, " scheduler_algorithm_time ", scheduler_algorithm_time, " task_wait_time ", task_wait_time, " task_processing_time ", task_duration
-
-            #Decrement appropriate counters at original scheduler
-            assert(job.scheduled_by is not None)
-            job.scheduled_by.decrement_job_type_counter(job.job_type_for_scheduling == BIG)
 
         events.append((task_completion_time, TaskEndEvent(worker, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, job.estimated_task_duration, this_task_id)))
         
@@ -1418,7 +1435,7 @@ SMALL = 0
 job_start_tstamps = {}
 
 random.seed(123456798)
-if(len(sys.argv) != 24):
+if(len(sys.argv) != 26):
     print "Incorrent number of parameters."
     sys.exit(1)
 
@@ -1445,7 +1462,13 @@ HEARTBEAT_DELAY                 = int(sys.argv[19])
 MIN_NR_PROBES                   = int(sys.argv[20])
 SBP_ENABLED                     = (sys.argv[21] == "yes")
 SYSTEM_SIMULATED                = sys.argv[22]  
-PERCENTAGE_WORKERS_OFF          = float(sys.argv[23])
+IS_COUNT_SAMPLED                = (sys.argv[23] == "yes")   # A "no" indicates time based sampling
+JOB_COUNTERS_NUM_BUCKETS        = int(sys.argv[24])
+JOB_COUNTERS_TOTAL_NUM_SAMPLES  = int(sys.argv[25])
+
+JOB_COUNTERS_NUM_SAMPLES_PER_BUCKET = 0
+if JOB_COUNTERS_NUM_BUCKETS > 0:
+    JOB_COUNTERS_NUM_SAMPLES_PER_BUCKET = JOB_COUNTERS_TOTAL_NUM_SAMPLES / JOB_COUNTERS_NUM_BUCKETS
 
 #MIN_NR_PROBES = 20 #1/100*TOTAL_WORKERS
 CAP_SRPT_SBP = 5 #cap on the % of slowdown a job can tolerate for SRPT and SBP
