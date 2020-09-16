@@ -826,8 +826,11 @@ class Scheduler(object):
     def __init__(self):
         self.long_jobs_counter = 0
         self.total_jobs_counter = 0
-        self.job_counter_buckets = [0 for i in range(JOB_COUNTERS_NUM_BUCKETS)]
-  
+        self.long_tasks_jobs_duration = 0
+        self.total_tasks_jobs_duration = 0
+        self.job_counter_buckets = [0 for i in range(JOB_CHARACTERISTICS_NUM_BUCKETS)]
+
+    # THE FOLLOWING FUNCTIONS ARE FOR COUNTING LONG JOBS
     # Scheduler class
     # This function increments job counters and stores them in buckets if
     # required samples are collected.
@@ -836,12 +839,12 @@ class Scheduler(object):
         if is_long:
             self.long_jobs_counter += 1
 
-        if self.total_jobs_counter == JOB_COUNTERS_NUM_SAMPLES_PER_BUCKET:
+        if self.total_jobs_counter == JOB_CHARACTERISTICS_NUM_SAMPLES_PER_BUCKET:
             # Shift buckets to make space
-            for i in range(1, JOB_COUNTERS_NUM_BUCKETS):
+            for i in range(1, JOB_CHARACTERISTICS_NUM_BUCKETS):
                 self.job_counter_buckets[i - 1] = self.job_counter_buckets[i]
             # Calculate latest sample
-            self.job_counter_buckets[JOB_COUNTERS_NUM_BUCKETS - 1] = self.long_jobs_counter  / self.total_jobs_counter
+            self.job_counter_buckets[JOB_CHARACTERISTICS_NUM_BUCKETS - 1] = self.long_jobs_counter  / self.total_jobs_counter
             # Reset counters
             self.reset_job_type_counter()
 
@@ -854,6 +857,31 @@ class Scheduler(object):
     # Scheduler class
     def get_job_type_counter(self):
         return (self.total_jobs_counter, self.long_jobs_counter)
+    # END - THE FOLLOWING FUNCTIONS ARE FOR COUNTING LONG JOBS
+
+    # THE FOLLOWING FUNCTIONS ARE FOR ESTIMATING CUMULATIVE LONG TASKS DURATIONS
+    def increment_task_job_type_duration(self, is_long, tasks_duration):
+        self.total_tasks_jobs_duration += tasks_duration
+        if is_long:
+            self.long_tasks_jobs_duration += tasks_duration
+
+        if self.total_tasks_jobs_duration == JOB_CHARACTERISTICS_NUM_SAMPLES_PER_BUCKET:
+            # Shift buckets to make space
+            for i in range(1, JOB_CHARACTERISTICS_NUM_BUCKETS):
+                self.job_counter_buckets[i - 1] = self.job_counter_buckets[i]
+            # Calculate latest sample
+            self.job_counter_buckets[JOB_CHARACTERISTICS_NUM_BUCKETS - 1] = self.long_tasks_jobs_duration  / self.total_tasks_jobs_duration
+            # Reset counters
+            self.reset_task_job_type_duration()
+
+    def reset_task_job_type_duration(self):
+        self.total_tasks_jobs_duration = 0
+        self.long_tasks_jobs_duration = 0
+
+    def get_task_job_type_duration(self):
+        return (self.total_tasks_jobs_duration, self.long_tasks_jobs_duration)
+    # END - THE FOLLOWING FUNCTIONS ARE FOR ESTIMATING CUMULATIVE LONG TASKS DURATIONS
+
 #####################################################################################################################
 #####################################################################################################################
 
@@ -1205,14 +1233,14 @@ class Simulation(object):
         count = 0
         for scheduler_index in self.scheduler_indices:
             scheduler = self.workers[scheduler_index].scheduler
-            for i in range(JOB_COUNTERS_NUM_BUCKETS):
+            for i in range(JOB_CHARACTERISTICS_NUM_BUCKETS):
                 long_jobs_weight +=  (i + 1) * scheduler.job_counter_buckets[i]
 
-            total_jobs, long_jobs = scheduler.get_job_type_counter()
+            total_jobs, long_jobs = scheduler.get_task_job_type_duration()
             if total_jobs > 0:
                 long_jobs_weight_from_counters += float(long_jobs) / float(total_jobs)
                 count += 1
-        total_weights = float(len(self.scheduler_indices) * JOB_COUNTERS_NUM_BUCKETS * (JOB_COUNTERS_NUM_BUCKETS + 1) / 2.0)
+        total_weights = float(len(self.scheduler_indices) * JOB_CHARACTERISTICS_NUM_BUCKETS * (JOB_CHARACTERISTICS_NUM_BUCKETS + 1) / 2.0)
         nodes = math.ceil(TOTAL_WORKERS * long_jobs_weight / total_weights)
         if nodes > 0.0:
             return nodes
@@ -1237,9 +1265,9 @@ class Simulation(object):
         assert scheduler is not None
 
         long_job = job.job_type_for_scheduling == BIG
-        # Increment the counter for long or short job
-        scheduler.increment_job_type_counter(long_job)
         tasks_left_to_place = len(job.unscheduled_tasks)
+        # Increment the counter for long or short job
+        scheduler.increment_task_job_type_duration(long_job, tasks_left_to_place * job.estimated_task_duration)
         job.scheduled_by = scheduler
         btmap = self.cluster_status_keeper.get_btmap()
         if long_job:
@@ -1463,12 +1491,12 @@ MIN_NR_PROBES                   = int(sys.argv[20])
 SBP_ENABLED                     = (sys.argv[21] == "yes")
 SYSTEM_SIMULATED                = sys.argv[22]  
 IS_COUNT_SAMPLED                = (sys.argv[23] == "yes")   # A "no" indicates time based sampling
-JOB_COUNTERS_NUM_BUCKETS        = int(sys.argv[24])
-JOB_COUNTERS_TOTAL_NUM_SAMPLES  = int(sys.argv[25])
+JOB_CHARACTERISTICS_NUM_BUCKETS        = int(sys.argv[24])
+JOB_CHARACTERISTICS_TOTAL_NUM_SAMPLES  = int(sys.argv[25])
 
-JOB_COUNTERS_NUM_SAMPLES_PER_BUCKET = 0
-if JOB_COUNTERS_NUM_BUCKETS > 0:
-    JOB_COUNTERS_NUM_SAMPLES_PER_BUCKET = JOB_COUNTERS_TOTAL_NUM_SAMPLES / JOB_COUNTERS_NUM_BUCKETS
+JOB_CHARACTERISTICS_NUM_SAMPLES_PER_BUCKET = 0
+if JOB_CHARACTERISTICS_NUM_BUCKETS > 0:
+    JOB_CHARACTERISTICS_NUM_SAMPLES_PER_BUCKET = JOB_CHARACTERISTICS_TOTAL_NUM_SAMPLES / JOB_CHARACTERISTICS_NUM_BUCKETS
 
 #MIN_NR_PROBES = 20 #1/100*TOTAL_WORKERS
 CAP_SRPT_SBP = 5 #cap on the % of slowdown a job can tolerate for SRPT and SBP
