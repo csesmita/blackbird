@@ -345,7 +345,7 @@ class ClusterStatusKeeper():
                         tasks.pop(task_index)
                         break
                     task_index += 1
-                assert task_index < original_task_queue_length, (" offending value for task_duration: %r %r %i" % (task_duration,job_id,worker))
+                assert task_index < original_task_queue_length, (" offending value for task_duration: %r %r %i" % (duration,job_id,worker))
                 if(len(tasks) == 0):
                     self.btmap.flip(worker)
 
@@ -645,6 +645,8 @@ class Worker(object):
 
         was_successful = True
         task_status = True
+        # This ensures only outstanding jobs are processed.
+        # Redundant probes are removed later.
         if len(self.simulation.jobs[job_id].unscheduled_tasks) == 0 :
             get_task_response_time = current_time + 2 * NETWORK_DELAY
             was_successful = False
@@ -675,6 +677,8 @@ class Worker(object):
         if(SBP_ENABLED==False or not was_successful or job_bydef_big):
             #so the probe remains if SBP is on, task was succesful and is small
             #if task status unexpectedly failed then also probe stays
+            #This also removes all redundant probes without accounting for them
+            #in response times
             self.queued_probes.pop(pos)
 
         if(SRPT_ENABLED==True and (SYSTEM_SIMULATED=="Eagle" or SYSTEM_SIMULATED=="Hawk")):
@@ -977,8 +981,8 @@ class Simulation(object):
     #Simulation class
     def find_workers_random(self, probe_ratio, nr_tasks, possible_worker_indices, min_probes):
         chosen_worker_indices = []
-        if possible_worker_indices is []:
-            print "Empty possible_worker_indices!!"
+        if possible_worker_indices == []:
+            return []
         nr_probes = max(probe_ratio*nr_tasks,min_probes)
         for it in range(0,nr_probes):
             rnd_index = random.randint(0,len(possible_worker_indices)-1)
@@ -1007,6 +1011,7 @@ class Simulation(object):
                 assert(current_time >= start_of_crt_big_task)
                 adjusted_waiting_time = qlen
 
+                #If the qlen is > 0 and running a long task
                 if(start_of_crt_big_task != -1):
                     executed_so_far = current_time - start_of_crt_big_task
                     estimated_crt_task = worker_obj.estruntime_crt_task
@@ -1015,7 +1020,8 @@ class Simulation(object):
                 assert adjusted_waiting_time >= 0, " offending value for adjusted_waiting_time: %r" % adjusted_waiting_time                 
                 prio_queue.put((adjusted_waiting_time,worker_id))
 
-        #performance optimization 
+        #performance optimization
+        #If there are num_tasks empty nodes, then go ahead allocate them all
         if(len(empty_nodes) == workers_needed):
             return empty_nodes
         else:
@@ -1023,7 +1029,9 @@ class Simulation(object):
             for nodeid in chosen_worker_indices:
                 prio_queue.put((estimated_task_duration,nodeid))
 
-        
+
+        # For nodes that are running long tasks, fill them up on the order of their
+        # estimated times
         queue_length,worker = prio_queue.get()
         while (workers_needed > len(chosen_worker_indices)):
             next_queue_length,next_worker = prio_queue.get()
@@ -1226,7 +1234,7 @@ class Simulation(object):
  
     # Simulation class
     # This function calculates the weighted average of long jobs to total jobs
-    # TODO - Optimize - needn't be called for every job
+    # TODO - Optimize - needn't be called for every long job
     def get_weighted_avg(self):
         long_jobs_weight = 0.0
         long_jobs_weight_from_counters = 0.0
@@ -1301,30 +1309,13 @@ class Simulation(object):
                 possible_worker_indices |= set(new_long_node_workers)
             ##### NEW NODE CHECK #####
 
-            while True:
-                # On every iteration, place tasks on N least loaded workers, where N is the max of nodes and number of tasks.
-                maximum_workers_needed_in_iteration = tasks_left_to_place if tasks_left_to_place <= len(possible_worker_indices) else len(possible_worker_indices)
-                #Logic for sorting nodes hosting long jobs only.
-                sorted_workers = sorted(self.cluster_status_keeper.get_workers_queue_status_delayed(possible_worker_indices, scheduler_index, current_time), key = lambda kv:(kv[1], kv[0]))[0:maximum_workers_needed_in_iteration]
+            worker_indices = self.find_workers_long_job_prio(job.num_tasks, job.estimated_task_duration, current_time, self, possible_worker_indices)
+            # Update the cluster status for long jobs
+            self.cluster_status_keeper.update_workers_queue(worker_indices, True, job.estimated_task_duration, job.id, current_time)
+            for worker_id in worker_indices:
+                task_arrival_events.append((current_time + NETWORK_DELAY,
+                     ProbeEvent(self.workers[worker_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
 
-                # Schedule tasks
-                task_index = 0
-                while task_index < maximum_workers_needed_in_iteration:
-                    worker_id, worker_queue_length = sorted_workers[0]
-                    task_arrival_time = current_time + NETWORK_DELAY
-                    task_arrival_events.append((task_arrival_time,
-                         ProbeEvent(self.workers[worker_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
-                    # Update the local copy of queue lengths
-                    sorted_workers[0] = (worker_id, worker_queue_length + job.estimated_task_duration)
-                    sorted_workers = sorted(sorted_workers, key=operator.itemgetter(1))
-                    task_index += 1
-                    # Update the cluster status for long jobs
-                    self.cluster_status_keeper.update_workers_queue([worker_id], True, job.estimated_task_duration, job.id, task_arrival_time)
-
-                tasks_left_to_place -= maximum_workers_needed_in_iteration
-                if tasks_left_to_place == 0:
-                   break
-   
             # Return task arrival events for long jobs
             return task_arrival_events
 
