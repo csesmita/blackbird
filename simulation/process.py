@@ -48,7 +48,13 @@ jobrunningtime = []
 schedulertime = []
 waittime = []
 processingtime = []
+utilization = ""
 for line in infile:
+    if "utilization" in line:
+        #Copy the line over as is
+        utilization = line
+        continue
+
     job_short_long = "short" if ('by_def:  0' in line) else "long"
     #This is the type of job we are looking for
     if job_short_long != sys.argv[3]:
@@ -74,5 +80,9 @@ processingtime.sort()
 outfile.write("%s\t%s\t(%s\t%s\t%s)\n"% ("Cluster Size ", sys.argv[5], "(Scheduler Time", "Task Wait Time", "Task Processing Time)"))
 outfile.write("%s\t%s\t(%s\t%s\t%s)\n"% ("50th percentile: ",  np.percentile(jobrunningtime, 50), np.percentile(schedulertime, 50), np.percentile(waittime, 50), np.percentile(processingtime, 50))) 
 outfile.write("%s\t%s\t(%s\t%s\t%s)\n" % ("90th percentile: ", np.percentile(jobrunningtime, 90), np.percentile(schedulertime, 90), np.percentile(waittime, 90), np.percentile(processingtime, 90))) 
-outfile.write("%s\t%s\t(%s\t%s\t%s)\n" % ("99th percentile: ", np.percentile(jobrunningtime, 99), np.percentile(schedulertime, 99), np.percentile(waittime, 99), np.percentile(processingtime, 99))) 
+outfile.write("%s\t%s\t(%s\t%s\t%s)\n" % ("99th percentile: ", np.percentile(jobrunningtime, 99), np.percentile(schedulertime, 99), np.percentile(waittime, 99), np.percentile(processingtime, 99)))
+
+# Copy in utilization informartion
+if utilization != "":
+    outfile.write("%s\n"% (utilization))
 outfile.close()

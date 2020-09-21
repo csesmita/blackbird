@@ -1389,6 +1389,7 @@ class Simulation(object):
 
     #Simulation class
     def run(self):
+        global utilization
         last_time = 0
 
         self.jobs_file = open(self.WORKLOAD_FILE, 'r')
@@ -1458,6 +1459,7 @@ if(len(sys.argv) != 26):
     print "Incorrent number of parameters."
     sys.exit(1)
 
+utilization = 0
 
 WORKLOAD_FILE                   = sys.argv[1]
 stealing                        = (sys.argv[2] == "yes")
@@ -1499,6 +1501,7 @@ s = Simulation(MONITOR_INTERVAL, stealing, SCHEDULE_BIG_CENTRALIZED, WORKLOAD_FI
 s.run()
 
 print "Simulation ended in ", (time.time() - t1), " s "
+print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_WORKERS, " workers is ", utilization
 
 finished_file.close()
 load_file.close()
