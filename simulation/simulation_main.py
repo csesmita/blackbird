@@ -1233,9 +1233,8 @@ class Simulation(object):
 
             total_jobs, long_jobs = scheduler.get_task_job_type_duration()
             # Only consider data from schedulers that have seen long jobs
-            if long_jobs > 0:
-                long_jobs_weight_from_counters += float(long_jobs) / float(total_jobs)
-                count += 1
+            long_jobs_weight_from_counters += float(long_jobs)
+            count += total_jobs
         if scheduler_count > 0:
             ratio = long_jobs_weight / float(scheduler_count)
             nodes = int(math.floor(TOTAL_WORKERS * ratio))
