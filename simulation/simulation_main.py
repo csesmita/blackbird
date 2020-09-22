@@ -168,7 +168,7 @@ class JobArrival(Event, file):
             worker_indices.append(random.choice(self.simulation.scheduler_indices))
         elif not long_job:
             # Short job schedulers
-            #print current_time, ": Short Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
+            print current_time, ": Short Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
             rnd_worker_in_big_partition = random.choice(list(self.simulation.big_partition_workers_hash.keys()))
             self.simulation.hash_jobid_to_node[self.job.id]=rnd_worker_in_big_partition
 
@@ -828,59 +828,34 @@ class Worker(object):
 
 class Scheduler(object):
     def __init__(self):
-        self.long_jobs_counter = 0
         self.total_jobs_counter = 0
-        self.long_tasks_jobs_duration = 0
-        self.total_tasks_jobs_duration = 0
-        self.job_counter_buckets = [0 for i in range(JOB_CHARACTERISTICS_NUM_BUCKETS)]
+        self.long_tasks_jobs_duration = 0.0
+        self.total_tasks_jobs_duration = 0.0
+        self.tasks_jobs_duration_buckets = [float('inf') for i in range(JOB_CHARACTERISTICS_NUM_BUCKETS)]
 
-    # THE FOLLOWING FUNCTIONS ARE FOR COUNTING LONG JOBS
     # Scheduler class
-    # This function increments job counters and stores them in buckets if
-    # required samples are collected.
-    def increment_job_type_counter(self, is_long):
+    # THE FOLLOWING FUNCTIONS ARE FOR ESTIMATING CUMULATIVE LONG TASKS DURATIONS
+    def increment_task_job_type_duration(self, is_long, num_tasks, est_task_duration):
+        self.total_tasks_jobs_duration += num_tasks * est_task_duration
         self.total_jobs_counter += 1
         if is_long:
-            self.long_jobs_counter += 1
+            self.long_tasks_jobs_duration += num_tasks * est_task_duration
 
-        if self.total_jobs_counter == JOB_CHARACTERISTICS_NUM_SAMPLES_PER_BUCKET:
+        # Buckets are filled from highest to lowest index, highest index 
+        # having the most recent sample
+        if self.total_jobs_counter >= JOB_CHARACTERISTICS_NUM_SAMPLES_PER_BUCKET:
             # Shift buckets to make space
             for i in range(1, JOB_CHARACTERISTICS_NUM_BUCKETS):
-                self.job_counter_buckets[i - 1] = self.job_counter_buckets[i]
+                self.tasks_jobs_duration_buckets[i - 1] = self.tasks_jobs_duration_buckets[i]
             # Calculate latest sample
-            self.job_counter_buckets[JOB_CHARACTERISTICS_NUM_BUCKETS - 1] = self.long_jobs_counter  / self.total_jobs_counter
-            # Reset counters
-            self.reset_job_type_counter()
-
-
-    # Scheduler class
-    def reset_job_type_counter(self):
-        self.total_jobs_counter = 0
-        self.long_jobs_counter = 0
-
-    # Scheduler class
-    def get_job_type_counter(self):
-        return (self.total_jobs_counter, self.long_jobs_counter)
-    # END - THE FOLLOWING FUNCTIONS ARE FOR COUNTING LONG JOBS
-
-    # THE FOLLOWING FUNCTIONS ARE FOR ESTIMATING CUMULATIVE LONG TASKS DURATIONS
-    def increment_task_job_type_duration(self, is_long, tasks_duration):
-        self.total_tasks_jobs_duration += tasks_duration
-        if is_long:
-            self.long_tasks_jobs_duration += tasks_duration
-
-        if self.total_tasks_jobs_duration == JOB_CHARACTERISTICS_NUM_SAMPLES_PER_BUCKET:
-            # Shift buckets to make space
-            for i in range(1, JOB_CHARACTERISTICS_NUM_BUCKETS):
-                self.job_counter_buckets[i - 1] = self.job_counter_buckets[i]
-            # Calculate latest sample
-            self.job_counter_buckets[JOB_CHARACTERISTICS_NUM_BUCKETS - 1] = self.long_tasks_jobs_duration  / self.total_tasks_jobs_duration
+            self.tasks_jobs_duration_buckets[JOB_CHARACTERISTICS_NUM_BUCKETS - 1] = self.long_tasks_jobs_duration  / self.total_tasks_jobs_duration
             # Reset counters
             self.reset_task_job_type_duration()
 
     def reset_task_job_type_duration(self):
-        self.total_tasks_jobs_duration = 0
-        self.long_tasks_jobs_duration = 0
+        self.total_tasks_jobs_duration = 0.0
+        self.long_tasks_jobs_duration = 0.0
+        self.total_jobs_counter = 0
 
     def get_task_job_type_duration(self):
         return (self.total_tasks_jobs_duration, self.long_tasks_jobs_duration)
@@ -913,6 +888,7 @@ class Simulation(object):
                 # Directly access scheduler indices in Simulation class
                 self.scheduler_indices.append(worker.id)
 
+        print "Number of schedulers ", len(self.scheduler_indices)
         self.worker_indices = range(TOTAL_WORKERS)
         self.off_mean_bottom = off_mean_bottom
         self.off_mean_top = off_mean_top
@@ -980,6 +956,7 @@ class Simulation(object):
 
     #Simulation class
     def find_workers_random(self, probe_ratio, nr_tasks, possible_worker_indices, min_probes):
+        #print "Number of workers for short job", len(possible_worker_indices), "and num tasks", nr_tasks
         chosen_worker_indices = []
         if possible_worker_indices == []:
             return []
@@ -992,7 +969,8 @@ class Simulation(object):
 
     #Simulation class
     def find_workers_long_job_prio(self, num_tasks, estimated_task_duration, current_time, simulation, hash_workers_considered):
-
+        if hash_workers_considered == []:
+            return []
         chosen_worker_indices = []
         workers_needed = num_tasks
         prio_queue = Queue.PriorityQueue()
@@ -1029,11 +1007,13 @@ class Simulation(object):
             for nodeid in chosen_worker_indices:
                 prio_queue.put((estimated_task_duration,nodeid))
 
-
         # For nodes that are running long tasks, fill them up on the order of their
         # estimated times
         queue_length,worker = prio_queue.get()
         while (workers_needed > len(chosen_worker_indices)):
+            if prio_queue.empty():
+                prio_queue.put((queue_length,worker))
+                continue
             next_queue_length,next_worker = prio_queue.get()
             while(queue_length <= next_queue_length and len(chosen_worker_indices) < workers_needed):
                 chosen_worker_indices.append(worker)
@@ -1234,27 +1214,36 @@ class Simulation(object):
  
     # Simulation class
     # This function calculates the weighted average of long jobs to total jobs
-    # TODO - Optimize - needn't be called for every long job
     def get_weighted_avg(self):
         long_jobs_weight = 0.0
         long_jobs_weight_from_counters = 0.0
         count = 0
+        scheduler_count = 0
         for scheduler_index in self.scheduler_indices:
             scheduler = self.workers[scheduler_index].scheduler
+            weight = 0.0
+            long_jobs_scheduler = 0.0
             for i in range(JOB_CHARACTERISTICS_NUM_BUCKETS):
-                long_jobs_weight +=  (i + 1) * scheduler.job_counter_buckets[i]
+                if scheduler.tasks_jobs_duration_buckets[i] != float('inf'):
+                    long_jobs_scheduler +=  (i + 1) * scheduler.tasks_jobs_duration_buckets[i]
+                    weight += i + 1
+            if long_jobs_scheduler > 0.0:
+                scheduler_count += 1
+                long_jobs_weight += float(long_jobs_scheduler) / float(weight)
 
             total_jobs, long_jobs = scheduler.get_task_job_type_duration()
-            if total_jobs > 0:
+            # Only consider data from schedulers that have seen long jobs
+            if long_jobs > 0:
                 long_jobs_weight_from_counters += float(long_jobs) / float(total_jobs)
                 count += 1
-        total_weights = float(len(self.scheduler_indices) * JOB_CHARACTERISTICS_NUM_BUCKETS * (JOB_CHARACTERISTICS_NUM_BUCKETS + 1) / 2.0)
-        nodes = math.ceil(TOTAL_WORKERS * long_jobs_weight / total_weights)
-        if nodes > 0.0:
+        if scheduler_count > 0:
+            ratio = long_jobs_weight / float(scheduler_count)
+            nodes = int(math.floor(TOTAL_WORKERS * ratio))
             return nodes
         #Insufficient data points yet
-        return math.ceil(TOTAL_WORKERS * long_jobs_weight_from_counters / float(count))
-
+        if count > 0:
+            return int(math.floor(TOTAL_WORKERS * float(long_jobs_weight_from_counters) / float(count)))
+        return TOTAL_WORKERS / 2
 
 
     # Simulation class
@@ -1275,38 +1264,38 @@ class Simulation(object):
         long_job = job.job_type_for_scheduling == BIG
         tasks_left_to_place = len(job.unscheduled_tasks)
         # Increment the counter for long or short job
-        scheduler.increment_task_job_type_duration(long_job, tasks_left_to_place * job.estimated_task_duration)
+        scheduler.increment_task_job_type_duration(long_job, tasks_left_to_place, job.estimated_task_duration)
         job.scheduled_by = scheduler
         btmap = self.cluster_status_keeper.get_btmap()
         if long_job:
             # Sort all workers running long jobs in this DC according to their queue lengths.
             # Ranking policy used - Least loaded node AMONG ELIGIBLE NODES
             # TODO - Change this to best fit node, by changing the number of slots per worker.
-            # TODO - Do this just once to simulate the resource table and store a local copy to work with.
             # btmap indicates workers where long jobs are running
 
             ##### NEW NODE CHECK #####
             # First check if nodes not yet running a long job can run one now.
-            # For this, the ratio of nodes running long jobs versus running short jobs
-            # = (all long jobs seen by all schedulers) / (number of schedulers * number of short jobs seen on this scheduler)
-            # For short jobs, schedulers can only approximate, since they
-            # do not have information on short jobs scheduled by other schedulers.
+            # For this, the ratio of long job duration across all tasks to the
+            # total duration scheduled.
+            # = (all long task durations seen by all schedulers) / (number of schedulers * number of short jobs seen on this scheduler)
             # Ceil ensures atleast one node.
-            # TODO - Does this logic need to factor in the number of tasks as well, or will just the number of jobs do? 
             possible_worker_indices = set(btmap.nonzero())
-            max_long_jobs_nodes = max(self.get_weighted_avg(), 1)
-            current_long_job_nodes = btmap.count()
+            num_max_long_jobs_nodes = self.get_weighted_avg()
+            num_current_long_job_nodes = btmap.count()
             new_long_node_workers = []
-            if current_long_job_nodes < max_long_jobs_nodes:
-                #TODO - Re-visit allocation of nodes for long jobs given the delta.
-                #Randomly consider workers not yet running a long job
-                #Always take the floor, it should never run so tight!
-                num_allowed = int(math.ceil((max_long_jobs_nodes - current_long_job_nodes) / 2.0))
+            if num_current_long_job_nodes < num_max_long_jobs_nodes:
+                num_allowed = num_max_long_jobs_nodes - num_current_long_job_nodes
                 candidate_workers = set(range(TOTAL_WORKERS))
                 if btmap is not []:
                     candidate_workers = candidate_workers - set(btmap.nonzero())
-                new_long_node_workers = random.sample(candidate_workers, num_allowed)
-                possible_worker_indices |= set(new_long_node_workers)
+                #Randomly consider workers not yet running a long job
+                if num_allowed < len(candidate_workers):
+                    new_long_node_workers = random.sample(candidate_workers, num_allowed)
+                else:
+                    new_long_node_workers = candidate_workers
+                possible_worker_indices = set(btmap.nonzero()) | set(new_long_node_workers)
+            else:
+                possible_worker_indices = (list(btmap.nonzero()))[0:num_max_long_jobs_nodes]
             ##### NEW NODE CHECK #####
 
             worker_indices = self.find_workers_long_job_prio(job.num_tasks, job.estimated_task_duration, current_time, self, possible_worker_indices)
