@@ -321,10 +321,6 @@ class ClusterStatusKeeper():
         return self.btmap
 
     # ClusterStatusKeeper class
-    # Add the future tasks here only if the task has been seen, i.e.
-    # This node sees its own scheduled tasks if current time >= their future time.
-    # This node sees other nodes' scheduled task if current time >= (their future time + NETWORK_DELAY)
-    # for update to go from that worker node to all other scheduler nodes.
     def update_workers_queue(self, worker_indices, increase, duration, job_id, arrival_time_at_worker):
         for worker in worker_indices:
             # tasks is of the form -  [[10, 20, 1], [20, 20, 1], ...]
@@ -348,28 +344,6 @@ class ClusterStatusKeeper():
                 assert task_index < original_task_queue_length, (" offending value for task_duration: %r %r %i" % (duration,job_id,worker))
                 if(len(tasks) == 0):
                     self.btmap.flip(worker)
-
-    # ClusterStatusKeeper class
-    # Add the future tasks here only if the task has been seen, i.e.
-    # This node sees its own scheduled tasks if current time >= their future time.
-    # This node sees other nodes' scheduled task if current time >= (their future time + NETWORK_DELAY)
-    # for update to go from that worker node to all other scheduler nodes.
-    def get_workers_queue_status_delayed(self, worker_indices, scheduler_index, current_time):
-        workers_estimated_times = {}
-        for worker_index in worker_indices:
-            worker_estimated_time = 0
-            hop = 1
-            if worker_index == scheduler_index:
-                hop = 0
-            limit = current_time - hop * NETWORK_DELAY
-            task_index = 0
-            while task_index < len(self.worker_queues[worker_index]):
-                arrival_time = self.worker_queues[worker_index][task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME]
-                if arrival_time <= limit:
-                    worker_estimated_time += self.worker_queues[worker_index][task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION]
-                task_index += 1
-            workers_estimated_times[worker_index] = worker_estimated_time
-        return workers_estimated_times.items()
 
 #####################################################################################################################
 #####################################################################################################################
@@ -937,22 +911,6 @@ class Simulation(object):
         self.hash_jobid_to_node = {}
         self.btmap = None
         self.jobs_affected_by_holb={}  
-
-    #Simulation class
-    def subtract_sets(self, set1, set2):
-        used = {}
-        difference = []
-        ctr_long = 0
-
-        for item in set2:
-            used[item] = 1
-
-        for worker in set1:
-            if not worker in set2:
-                difference.append(worker)
-
-        return difference
-
 
     #Simulation class
     def find_workers_random(self, probe_ratio, nr_tasks, possible_worker_indices, min_probes):
