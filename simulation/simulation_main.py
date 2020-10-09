@@ -23,7 +23,7 @@ class TaskDurationDistributions:
 class EstimationErrorDistribution:
     CONSTANT, RANDOM, MEAN  = range(3)
 
-RATIO_SCHEDULERS_TO_WORKERS = 0.1
+RATIO_SCHEDULERS_TO_CORES = 0.1
 
 class Job(object):
     job_count = 1
@@ -403,7 +403,28 @@ class TaskEndEvent():
 
 #####################################################################################################################
 #####################################################################################################################
+# Support for multi-core machines in Murmuration
+class Machine(object):
+    def __init__(self, simulation, num_slots, id):
+        self.simulation = simulation
+        self.num_cores = num_slots
+        self.id = id
 
+        self.cores = []
+        while len(self.cores) < self.num_cores:
+            core_id = self.get_abs_slot_number_from_worker(id, len(self.cores))
+            core = Worker(simulation, 1, core_id, core_id, 0)
+            self.cores.append(core)
+
+    #Machine class
+    def get_abs_slot_number_from_worker(self, machine_id, relative_slot_number):
+        assert relative_slot_number < SLOTS_PER_WORKER
+        return machine_id * SLOTS_PER_WORKER + relative_slot_number
+
+#####################################################################################################################
+#####################################################################################################################
+# Legacy code for single slot workers - Eagle, IdealEagle, Hawk, DLWL and CLWL.
+# In Murmuration, this class denotes a single core on a machine.
 class Worker(object):
     def __init__(self, simulation, num_slots, id, index_last_small, index_first_big):
         
@@ -438,8 +459,9 @@ class Worker(object):
 
         #Role of a scheduler?
         self.scheduler = None
-        if random.random() < RATIO_SCHEDULERS_TO_WORKERS:
-            self.scheduler = Scheduler()
+        if SYSTEM_SIMULATED == "Murmuration":
+            if random.random() < RATIO_SCHEDULERS_TO_CORES:
+                self.scheduler = Scheduler()
 
     #Worker class
     def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap, handle_stealing):
@@ -847,6 +869,7 @@ class Simulation(object):
         self.jobs = {}
         self.event_queue = Queue.PriorityQueue()
         self.workers = []
+        self.machines = []
         self.scheduler_indices = []
 
         #Do not work with indexes. This is because small and big partition
@@ -854,15 +877,23 @@ class Simulation(object):
         #indices instead.
         self.index_last_worker_of_small_partition = int(SMALL_PARTITION*TOTAL_WORKERS*SLOTS_PER_WORKER/100)-1
         self.index_first_worker_of_big_partition  = int((100-BIG_PARTITION)*TOTAL_WORKERS*SLOTS_PER_WORKER/100)
+        # Only for Murmuration, first simulate machines which will simulate worker cores, which will simulate schedulers.
+        if SYSTEM_SIMULATED != "Murmuration":
+            while len(self.workers) < TOTAL_WORKERS:
+                worker = Worker(self, SLOTS_PER_WORKER, len(self.workers),self.index_last_worker_of_small_partition,self.index_first_worker_of_big_partition)
+                self.workers.append(worker)
+        else:
+            while len(self.machines) < TOTAL_WORKERS:
+                machine = Machine(self, SLOTS_PER_WORKER, len(self.machines))
+                self.machines.append(machine)
+                workers = machine.cores
+                self.workers.extend(workers)
+                for worker in workers:
+                    if worker.scheduler is not None:
+                        # Directly access scheduler indices in Simulation class
+                        self.scheduler_indices.append(worker.id)
+            print "Number of schedulers ", len(self.scheduler_indices)
 
-        while len(self.workers) < TOTAL_WORKERS:
-            worker = Worker(self, SLOTS_PER_WORKER, len(self.workers),self.index_last_worker_of_small_partition,self.index_first_worker_of_big_partition)
-            self.workers.append(worker)
-            if worker.scheduler is not None:
-                # Directly access scheduler indices in Simulation class
-                self.scheduler_indices.append(worker.id)
-
-        print "Number of schedulers ", len(self.scheduler_indices)
         self.worker_indices = range(TOTAL_WORKERS)
         self.off_mean_bottom = off_mean_bottom
         self.off_mean_top = off_mean_top
