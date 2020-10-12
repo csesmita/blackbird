@@ -44,6 +44,18 @@ class Job(object):
             job_start_tstamps[self.start_time] += 0.01
             self.start_time = job_start_tstamps[self.start_time]
         
+        self.actual_task_durations = []
+        self.cpu_req_per_task = []
+        self.cpu_avg_per_task = []
+        self.cpu_max_per_task = []
+        for i in range(self.num_tasks):
+            # File contains actual durations of tasks followed by
+            # cpu requested per task and cpu avg and max used per task
+            self.actual_task_durations.append(float(job_args[3 + i]))
+            #self.cpu_req_per_task.append(float(job_args[3 + i + self.num_tasks]))
+            #self.cpu_avg_per_task.append(float(job_args[3 + i + self.num_tasks]))
+            #self.cpu_max_per_task.append(float(job_args[3 + i + self.num_tasks]))
+
         self.id = Job.job_count
         Job.job_count += 1
         self.completed_tasks_count = 0
@@ -232,7 +244,7 @@ class PeriodicTimerEvent(Event):
     def run(self, current_time):
         new_events = []
 
-        total_load       = str(int(10000*(1-self.simulation.total_free_slots*1.0/(TOTAL_WORKERS*SLOTS_PER_WORKER)))/100.0)
+        total_load       = str(int(10000*(1-self.simulation.total_free_slots*1.0/(TOTAL_MACHINES*SLOTS_PER_WORKER)))/100.0)
         small_load       = str(int(10000*(1-self.simulation.free_slots_small_partition*1.0/len(self.simulation.small_partition_workers)))/100.0)
         big_load         = str(int(10000*(1-self.simulation.free_slots_big_partition*1.0/len(self.simulation.big_partition_workers)))/100.0)
         small_not_big_load ="N/A"
@@ -248,7 +260,7 @@ class PeriodicTimerEvent(Event):
 #####################################################################################################################
 #####################################################################################################################
 #####################################################################################################################
-
+# Class only used by DLWL
 class WorkerHeartbeatEvent(Event):
     
     def __init__(self,simulation):
@@ -292,20 +304,37 @@ class ClusterStatusKeeper():
     INDEX_OF_ARRIVAL_TIME = 0
     INDEX_OF_TASK_DURATION = 1
     INDEX_OF_JOB_ID = 2
-    def __init__(self):
+    def __init__(self, num_workers):
         # worker_queues is a key value pair of worker indices and queued tasks.
         # Queued tasks are array entries that each contain (arrival_time, task_duration)
         # Data Structure of worker_queues - 
         # <Worker Index> : [[t0_arrival_time, t0_task_duration], [...], [t_last_arrival_time, t_last_task_duration]]
         # Queue estimated time = t_last_arrival_time + t_last_task_duration
         self.worker_queues = {}
-        self.btmap = bitmap.BitMap(TOTAL_WORKERS)
-        for i in range(0, TOTAL_WORKERS):
+        self.btmap = bitmap.BitMap(num_workers)
+        for i in range(0, num_workers):
            self.worker_queues[i] = []
 
     # ClusterStatusKeeper class
+    # Only used by DLWL
     def get_queue_status(self):
         return self.worker_queues
+
+    # ClusterStatusKeeper class
+    # get_machine_est_wait() -  Send machine.cores[] here
+    # Returns singleton value to indicate the estimated wait time for the requested number of cores to be available
+    # on this machine.
+    # Might return smaller values for smaller cpu req, even if those requests come in later.
+    def get_machine_est_wait(self, machine_cores, cpu_req):
+        # Number of cores requested has to be atleast equal to the number of cores on the machine
+        assert len(machine_cores) >= cpu_req
+        machine_queue_est = []
+        for core_index in machine_cores:
+            machine_queue_est.append(self.get_workers_queue_status(core_index))
+        # Sort cores based on least estimated times
+        machine_queue_est.sort()
+        #cpu_req is available when the last of cores is available for use.
+        return machine_queue_est[cpu_req - 1]
 
     # ClusterStatusKeeper class
     def get_workers_queue_status(self, worker_index):
@@ -864,8 +893,8 @@ class Simulation(object):
     def __init__(self, monitor_interval, stealing_allowed, SCHEDULE_BIG_CENTRALIZED, WORKLOAD_FILE,small_job_th,cutoff_big_small,ESTIMATION,off_mean_bottom,off_mean_top,nr_workers):
 
         CUTOFF_THIS_EXP = float(small_job_th)
-        TOTAL_WORKERS = int(nr_workers)
-        self.total_free_slots = SLOTS_PER_WORKER * TOTAL_WORKERS
+        TOTAL_MACHINES = int(nr_workers)
+        self.total_free_slots = SLOTS_PER_WORKER * TOTAL_MACHINES
         self.jobs = {}
         self.event_queue = Queue.PriorityQueue()
         self.workers = []
@@ -875,15 +904,15 @@ class Simulation(object):
         #Do not work with indexes. This is because small and big partition
         #workers may not always be contiguous. Change logic here to store
         #indices instead.
-        self.index_last_worker_of_small_partition = int(SMALL_PARTITION*TOTAL_WORKERS*SLOTS_PER_WORKER/100)-1
-        self.index_first_worker_of_big_partition  = int((100-BIG_PARTITION)*TOTAL_WORKERS*SLOTS_PER_WORKER/100)
+        self.index_last_worker_of_small_partition = int(SMALL_PARTITION*TOTAL_MACHINES*SLOTS_PER_WORKER/100)-1
+        self.index_first_worker_of_big_partition  = int((100-BIG_PARTITION)*TOTAL_MACHINES*SLOTS_PER_WORKER/100)
         # Only for Murmuration, first simulate machines which will simulate worker cores, which will simulate schedulers.
         if SYSTEM_SIMULATED != "Murmuration":
-            while len(self.workers) < TOTAL_WORKERS:
+            while len(self.workers) < TOTAL_MACHINES:
                 worker = Worker(self, SLOTS_PER_WORKER, len(self.workers),self.index_last_worker_of_small_partition,self.index_first_worker_of_big_partition)
                 self.workers.append(worker)
         else:
-            while len(self.machines) < TOTAL_WORKERS:
+            while len(self.machines) < TOTAL_MACHINES:
                 machine = Machine(self, SLOTS_PER_WORKER, len(self.machines))
                 self.machines.append(machine)
                 workers = machine.cores
@@ -894,7 +923,7 @@ class Simulation(object):
                         self.scheduler_indices.append(worker.id)
             print "Number of schedulers ", len(self.scheduler_indices)
 
-        self.worker_indices = range(TOTAL_WORKERS)
+        self.worker_indices = range(TOTAL_MACHINES)
         self.off_mean_bottom = off_mean_bottom
         self.off_mean_top = off_mean_top
         self.ESTIMATION = ESTIMATION
@@ -932,7 +961,8 @@ class Simulation(object):
         self.jobs_completed = 0
         self.scheduled_last_job = False
 
-        self.cluster_status_keeper = ClusterStatusKeeper()
+        # Only for Murmuration will SLOTS_PER_WORKER be >= 1. For the rest, it is = 1.
+        self.cluster_status_keeper = ClusterStatusKeeper(TOTAL_MACHINES * SLOTS_PER_WORKER)
         self.stealing_allowed = stealing_allowed
         self.SCHEDULE_BIG_CENTRALIZED = SCHEDULE_BIG_CENTRALIZED
         self.WORKLOAD_FILE = WORKLOAD_FILE
@@ -1227,12 +1257,12 @@ class Simulation(object):
                 count += 1
         if scheduler_count > 0:
             ratio = long_jobs_weight / float(scheduler_count)
-            nodes = int(math.floor(TOTAL_WORKERS * ratio))
+            nodes = int(math.floor(TOTAL_MACHINES * ratio))
             return nodes
         #Insufficient data points yet
         if count > 0:
-            return int(math.floor(TOTAL_WORKERS * float(long_jobs_weight_from_counters) / float(count)))
-        return TOTAL_WORKERS / 2
+            return int(math.floor(TOTAL_MACHINES * float(long_jobs_weight_from_counters) / float(count)))
+        return TOTAL_MACHINES / 2
 
 
     # Simulation class
@@ -1274,7 +1304,7 @@ class Simulation(object):
             new_long_node_workers = []
             if num_current_long_job_nodes < num_max_long_jobs_nodes:
                 num_allowed = num_max_long_jobs_nodes - num_current_long_job_nodes
-                candidate_workers = set(range(TOTAL_WORKERS))
+                candidate_workers = set(range(TOTAL_MACHINES))
                 if btmap is not []:
                     candidate_workers = candidate_workers - set(btmap.nonzero())
                 #Randomly consider workers not yet running a long job
@@ -1298,7 +1328,7 @@ class Simulation(object):
             return task_arrival_events
 
         # This is for handling short jobs
-        possible_worker_indices = list(set(range(TOTAL_WORKERS)) - set(btmap.nonzero()))
+        possible_worker_indices = list(set(range(TOTAL_MACHINES)) - set(btmap.nonzero()))
         worker_indices = self.find_workers_random(PROBE_RATIO, job.num_tasks, possible_worker_indices, MIN_NR_PROBES)
         for worker_index in worker_indices:
             task_arrival_events.append((current_time + NETWORK_DELAY, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
@@ -1416,8 +1446,8 @@ class Simulation(object):
         total_busyness = 0
         for worker in self.workers:
             total_busyness += worker.busy_time
-        utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * TOTAL_WORKERS))
-        print "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_WORKERS, " workers is ", utilization
+        utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * TOTAL_MACHINES))
+        print "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES, " workers is ", utilization
 
 #####################################################################################################################
 #globals
@@ -1455,7 +1485,7 @@ OFF_MEAN_TOP                    = float(sys.argv[13])       # >= OFF_MEAN_BOTTOM
 STEALING_STRATEGY               = sys.argv[14]
 STEALING_LIMIT                  = int(sys.argv[15])         #cap on the nr of tasks to steal from one node
 STEALING_ATTEMPTS               = int(sys.argv[16])         #cap on the nr of nodes to contact for stealing
-TOTAL_WORKERS                   = int(sys.argv[17])
+TOTAL_MACHINES                   = int(sys.argv[17])
 SRPT_ENABLED                    = (sys.argv[18] == "yes")
 HEARTBEAT_DELAY                 = int(sys.argv[19])
 MIN_NR_PROBES                   = int(sys.argv[20])
@@ -1469,24 +1499,24 @@ JOB_CHARACTERISTICS_NUM_SAMPLES_PER_BUCKET = 0
 if JOB_CHARACTERISTICS_NUM_BUCKETS > 0:
     JOB_CHARACTERISTICS_NUM_SAMPLES_PER_BUCKET = JOB_CHARACTERISTICS_TOTAL_NUM_SAMPLES / JOB_CHARACTERISTICS_NUM_BUCKETS
 
-#MIN_NR_PROBES = 20 #1/100*TOTAL_WORKERS
+#MIN_NR_PROBES = 20 #1/100*TOTAL_MACHINES
 CAP_SRPT_SBP = 5 #cap on the % of slowdown a job can tolerate for SRPT and SBP
 
 t1 = time.time()
 
 stats = Stats()
-s = Simulation(MONITOR_INTERVAL, stealing, SCHEDULE_BIG_CENTRALIZED, WORKLOAD_FILE,CUTOFF_THIS_EXP,CUTOFF_BIG_SMALL,ESTIMATION,OFF_MEAN_BOTTOM,OFF_MEAN_TOP,TOTAL_WORKERS)
+s = Simulation(MONITOR_INTERVAL, stealing, SCHEDULE_BIG_CENTRALIZED, WORKLOAD_FILE,CUTOFF_THIS_EXP,CUTOFF_BIG_SMALL,ESTIMATION,OFF_MEAN_BOTTOM,OFF_MEAN_TOP,TOTAL_MACHINES)
 s.run()
 
 print "Simulation ended in ", (time.time() - t1), " s "
-print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_WORKERS, " workers is ", utilization
+print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES, " workers is ", utilization
 
 finished_file.close()
 load_file.close()
 
 # Generate CDF data
-os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "short" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
-os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "long" + " " + WORKLOAD_FILE + " " + str(TOTAL_WORKERS))
+os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "short" + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES))
+os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "long" + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES))
 
 print >> stats_file, "STATS_SH_PROBES_ASSIGNED_IN_BP:      ",    stats.STATS_SH_PROBES_ASSIGNED_IN_BP
 print >> stats_file, "STATS_SH_PROBES_QUEUED_BEHIND_BIG:      ",    stats.STATS_SH_PROBES_QUEUED_BEHIND_BIG 
