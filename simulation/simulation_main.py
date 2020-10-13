@@ -99,7 +99,7 @@ class Job(object):
            # File contains actual durations of tasks followed by
            # cpu requested per task and cpu avg and max used per task
            self.unscheduled_tasks.appendleft(int(float(job_args[3 + i])))
-           self.cpu_reqs_by_tasks.appendleft(float(job_args[3 + i + self.num_tasks]))
+           self.cpu_reqs_by_tasks.appendleft(int(math.ceil(float(job_args[3 + i + self.num_tasks]))))
            self.cpu_avg_per_task.appendleft(float(job_args[3 + i + 2*self.num_tasks]))
            self.cpu_max_per_task.appendleft(float(job_args[3 + i + 3*self.num_tasks]))
         assert(len(self.unscheduled_tasks) == self.num_tasks)
@@ -324,9 +324,6 @@ class ClusterStatusKeeper():
     def get_machine_est_wait(self, machine_obj, cpu_reqs):
         est_time_for_tasks = []
         cores_list_for_tasks = []
-        abs_core_ids = []
-        for core in machine_obj.cores:
-            abs_core_id.append(machine.get_abs_slot_number_from_machine(machine_obj.id, core.id))
         for cpu_req in cpu_reqs:
             # Number of cores requested has to be atleast equal to the number of cores on the machine
             # Filter out machines that have less than requested number of cores
@@ -335,14 +332,15 @@ class ClusterStatusKeeper():
                 est_time_for_tasks.append(float('inf'))
                 continue
             machine_queue_est = []
-            for abs_core_id in abs_core_ids:
-                machine_queue_est.add((abs_core_id , self.get_core_queue_status(abs_core_id)))
+            for core in machine_obj.cores:
+                machine_queue_est.append((core.id , self.get_core_queue_status(core.id)))
             # Sort cores based on least estimated times for this cpu_req
-            machine_est_time = sorted(machine_queue_est.items(), key=operator.itemgetter(1))
+            machine_est_time = numpy.array(sorted(machine_queue_est, key=operator.itemgetter(1)), dtype='i')
             #cpu_req is available when the fastest cpu_req number of cores is available for use.
-            cores_list = machine_est_time.keys()[:cpu_req - 1]
+            cores_list = list(machine_est_time[:cpu_req][:,0])
             cores_list_for_tasks.append(cores_list)
-            est_time_for_tasks.append(machine_est_time[cpu_req - 1])
+            est_time = int(machine_est_time[cpu_req-1][0])
+            est_time_for_tasks.append(est_time)
         assert len(est_time_for_tasks) == len(cpu_reqs)
         assert len(cores_list_for_tasks) == len(cpu_reqs)
         return (est_time_for_tasks, cores_list_for_tasks)
@@ -361,6 +359,8 @@ class ClusterStatusKeeper():
     # Can machines keep track of holes across cores to better fit other incoming tasks?
     def get_core_queue_status(self, core_index):
         last_task_index = len(self.worker_queues[core_index]) - 1
+        if last_task_index < 0:
+            return 0
         return self.worker_queues[core_index][last_task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION] + self.worker_queues[core_index][last_task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME]
 
     # ClusterStatusKeeper class
@@ -832,11 +832,6 @@ class Worker(object):
         return position_in_queue
 
     #Worker class
-    def get_machine_id_from_abs_slot_number(self, abs_slot_id):
-        return abs_slot_id / CORES_PER_MACHINE
-
-
-    #Worker class
     def get_next_probe_acc_to_srpt(self, current_time):
         min_remaining_exec_time = float('inf')
         position_in_queue       = -1
@@ -1081,42 +1076,48 @@ class Simulation(object):
             return []
         assert num_tasks == len(cpu_reqs_by_tasks)
         cores_lists_for_reqs_to_machine_matrix = {}
-        
+        est_time_list = []
+
         # First, build per machine per cpu request estimted wait time and cores list.
         for machine_id in hash_machines_considered:
             machine = self.machines[machine_id]
             # Returns ([est_time_at_machine...], [[list of absolute core ids],[],[]])
-            est_time_list, cores_list = self.cluster_status_keeper.get_machine_est_wait(machine, cpu_reqs_by_tasks)
-            est_time_list.append(machine_id) 
+            est_time, cores_list = self.cluster_status_keeper.get_machine_est_wait(machine, cpu_reqs_by_tasks)
+            est_time.append(machine_id)
+            est_time_list.append(est_time)
             cores_lists_for_reqs_to_machine_matrix[machine_id] = {}
             for index in range(len(cpu_reqs_by_tasks)):
                 cpu_req = cpu_reqs_by_tasks[index]
                 cores_lists_for_reqs_to_machine_matrix[machine_id][cpu_req] = cores_list[index]
 
         # est_time_machine_array = [[est_time..., m1], [est_time, ...., m2], ... ]
-        est_time_machine_array = np.array(est_time_list)
+        est_time_machine_array = numpy.array(est_time_list)
         # Start collapsing the matrix for best fit
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
         best_fit_for_tasks = []
+        cpu_reqs = numpy.array(cpu_reqs_by_tasks)
         for task_index in range(num_tasks):
             # est_time_across_machines_for_this_task = [t1 t2 t3,... tM] for this task across machines
-            est_time_across_machines_for_this_task = est_time_array[:,task_index]
-            best_fit_time = np.sort(est_time_across_machines_for_this_task)[0]
+            est_time_across_machines_for_this_task = est_time_machine_array[:,task_index]
+            best_fit_time = numpy.sort(est_time_across_machines_for_this_task)[0]
 
             #Fetch the machine with the best fit time for this task
-            row_index = np.where(est_time_across_machines_for_this_task == best_fit_time)[0][0]
-            chosen_machine = est_time_array[row_index][num_tasks]
-            cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine]
+            row_index = numpy.where(est_time_across_machines_for_this_task == best_fit_time)[0][0]
+            chosen_machine = int(est_time_machine_array[row_index][num_tasks])
+            cpu_req = cpu_reqs_by_tasks[task_index]
+            cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req]
             best_fit_for_tasks.append([chosen_machine, cores_at_chosen_machine])
 
             #Update est time at this machine and its cores
             self.cluster_status_keeper.update_workers_queue(cores_at_chosen_machine, True, estimated_task_duration, job_id, current_time)
 
             # Update our internal matrix est_time_machine_array for subsequent tasks that might need these number of cpus
-            cpu_req = cpu_reqs_by_tasks[task_index]
-            est_time_list, cores_list = self.cluster_status_keeper.get_machine_est_wait(self.machines[chosen_machine], [cpu_req])
-            est_time_machine_array[row_index, 0: num_tasks -1] = est_time_list
-            cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req] = cores_list
+            est_time, core_list = self.cluster_status_keeper.get_machine_est_wait(self.machines[chosen_machine], [cpu_req])
+            cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req] = core_list[0]
+            # Find all columns where cpu_req is the same as here.
+            col_indices = numpy.where(cpu_reqs == cpu_req)[0]
+            for col_index in col_indices:
+                est_time_machine_array[row_index][col_index] = est_time[0]
 
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
         return best_fit_for_tasks
@@ -1367,12 +1368,13 @@ class Simulation(object):
             # Sort all workers running long jobs in this DC according to their estimated times.
             # Ranking policy used - Least estimated time and hole duration > estimted task time.
             # btmap indicates workers where long jobs are running
-            machine_indices = self.find_workers_long_job_prio(job.num_tasks, job.estimated_task_duration, current_time, self, set(range(TOTAL_MACHINES)))
-            # Update the cluster status for long jobs
-            self.cluster_status_keeper.update_workers_queue(machine_indices, True, job.estimated_task_duration, job.id, current_time)
+            # Find workers and update the cluster status for long jobs
+            # Returns - [[m1,[cores]], [m2,[cores]],...]
+            machine_indices = self.find_workers_long_job_prio_murmuration(job.id, job.num_tasks, job.estimated_task_duration, current_time, self, set(range(TOTAL_MACHINES)), job.cpu_reqs_by_tasks)
             for machine_id in machine_indices:
-                task_arrival_events.append((current_time + NETWORK_DELAY,
-                     ProbeEvent(self.workers[machine_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+                for worker_id in machine_id[1]:
+                    task_arrival_events.append((current_time + NETWORK_DELAY,
+                         ProbeEvent(self.workers[worker_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
 
             # Return task arrival events for long jobs
             return task_arrival_events
