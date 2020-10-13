@@ -44,23 +44,15 @@ class Job(object):
             job_start_tstamps[self.start_time] += 0.01
             self.start_time = job_start_tstamps[self.start_time]
         
-        self.actual_task_durations = []
-        self.cpu_req_per_task = []
-        self.cpu_avg_per_task = []
-        self.cpu_max_per_task = []
-        for i in range(self.num_tasks):
-            # File contains actual durations of tasks followed by
-            # cpu requested per task and cpu avg and max used per task
-            self.actual_task_durations.append(float(job_args[3 + i]))
-            #self.cpu_req_per_task.append(float(job_args[3 + i + self.num_tasks]))
-            #self.cpu_avg_per_task.append(float(job_args[3 + i + self.num_tasks]))
-            #self.cpu_max_per_task.append(float(job_args[3 + i + self.num_tasks]))
-
         self.id = Job.job_count
         Job.job_count += 1
         self.completed_tasks_count = 0
         self.end_time = self.start_time
         self.unscheduled_tasks = collections.deque()
+        self.cpu_reqs_by_tasks = collections.deque()
+        self.cpu_avg_per_task = collections.deque()
+        self.cpu_max_per_task = collections.deque()
+
         self.off_mean_bottom = off_mean_bottom
         self.off_mean_top = off_mean_top
 
@@ -103,8 +95,13 @@ class Job(object):
 
     #Job class
     def file_task_execution_time(self, job_args):
-        for task_duration in (job_args[3:]):
-           self.unscheduled_tasks.appendleft(int(float(task_duration)))
+        for i in range(self.num_tasks):
+           # File contains actual durations of tasks followed by
+           # cpu requested per task and cpu avg and max used per task
+           self.unscheduled_tasks.appendleft(int(float(job_args[3 + i])))
+           self.cpu_reqs_by_tasks.appendleft(float(job_args[3 + i + self.num_tasks]))
+           self.cpu_avg_per_task.appendleft(float(job_args[3 + i + 2*self.num_tasks]))
+           self.cpu_max_per_task.appendleft(float(job_args[3 + i + 3*self.num_tasks]))
         assert(len(self.unscheduled_tasks) == self.num_tasks)
 
     #Job class
@@ -244,7 +241,7 @@ class PeriodicTimerEvent(Event):
     def run(self, current_time):
         new_events = []
 
-        total_load       = str(int(10000*(1-self.simulation.total_free_slots*1.0/(TOTAL_MACHINES*SLOTS_PER_WORKER)))/100.0)
+        total_load       = str(int(10000*(1-self.simulation.total_free_slots*1.0/(TOTAL_MACHINES*CORES_PER_MACHINE)))/100.0)
         small_load       = str(int(10000*(1-self.simulation.free_slots_small_partition*1.0/len(self.simulation.small_partition_workers)))/100.0)
         big_load         = str(int(10000*(1-self.simulation.free_slots_big_partition*1.0/len(self.simulation.big_partition_workers)))/100.0)
         small_not_big_load ="N/A"
@@ -321,20 +318,34 @@ class ClusterStatusKeeper():
         return self.worker_queues
 
     # ClusterStatusKeeper class
-    # get_machine_est_wait() -  Send machine.cores[] here
-    # Returns singleton value to indicate the estimated wait time for the requested number of cores to be available
-    # on this machine.
+    # get_machine_est_wait() -
+    # Returns ([est_task1, est_task2, ...],[[list of cores],[list of core], [],...])
     # Might return smaller values for smaller cpu req, even if those requests come in later.
-    def get_machine_est_wait(self, machine_cores, cpu_req):
-        # Number of cores requested has to be atleast equal to the number of cores on the machine
-        assert len(machine_cores) >= cpu_req
-        machine_queue_est = []
-        for core_index in machine_cores:
-            machine_queue_est.append(self.get_workers_queue_status(core_index))
-        # Sort cores based on least estimated times
-        machine_queue_est.sort()
-        #cpu_req is available when the last of cores is available for use.
-        return machine_queue_est[cpu_req - 1]
+    def get_machine_est_wait(self, machine_obj, cpu_reqs):
+        est_time_for_tasks = []
+        cores_list_for_tasks = []
+        abs_core_ids = []
+        for core in machine_obj.cores:
+            abs_core_id.append(machine.get_abs_slot_number_from_machine(machine_obj.id, core.id))
+        for cpu_req in cpu_reqs:
+            # Number of cores requested has to be atleast equal to the number of cores on the machine
+            # Filter out machines that have less than requested number of cores
+            if len(machine_obj.cores) < cpu_req:
+                cores_list_for_tasks.append([])
+                est_time_for_tasks.append(float('inf'))
+                continue
+            machine_queue_est = []
+            for abs_core_id in abs_core_ids:
+                machine_queue_est.add((abs_core_id , self.get_core_queue_status(abs_core_id)))
+            # Sort cores based on least estimated times for this cpu_req
+            machine_est_time = sorted(machine_queue_est.items(), key=operator.itemgetter(1))
+            #cpu_req is available when the fastest cpu_req number of cores is available for use.
+            cores_list = machine_est_time.keys()[:cpu_req - 1]
+            cores_list_for_tasks.append(cores_list)
+            est_time_for_tasks.append(machine_est_time[cpu_req - 1])
+        assert len(est_time_for_tasks) == len(cpu_reqs)
+        assert len(cores_list_for_tasks) == len(cpu_reqs)
+        return (est_time_for_tasks, cores_list_for_tasks)
 
     # ClusterStatusKeeper class
     def get_workers_queue_status(self, worker_index):
@@ -344,6 +355,13 @@ class ClusterStatusKeeper():
             estimated_time += self.worker_queues[worker_index][task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION]
             task_index += 1
         return estimated_time
+
+    # ClusterStatusKeeper class
+    # TODO - This accounts for holes when estimating time.
+    # Can machines keep track of holes across cores to better fit other incoming tasks?
+    def get_core_queue_status(self, core_index):
+        last_task_index = len(self.worker_queues[core_index]) - 1
+        return self.worker_queues[core_index][last_task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION] + self.worker_queues[core_index][last_task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME]
 
     # ClusterStatusKeeper class
     def get_btmap(self):
@@ -441,15 +459,14 @@ class Machine(object):
 
         self.cores = []
         while len(self.cores) < self.num_cores:
-            core_id = self.get_abs_slot_number_from_worker(id, len(self.cores))
+            core_id = self.get_abs_slot_number_from_machine(len(self.cores))
             core = Worker(simulation, 1, core_id, core_id, 0)
             self.cores.append(core)
 
     #Machine class
-    def get_abs_slot_number_from_worker(self, machine_id, relative_slot_number):
-        assert relative_slot_number < SLOTS_PER_WORKER
-        return machine_id * SLOTS_PER_WORKER + relative_slot_number
-
+    def get_abs_slot_number_from_machine(self, relative_slot_number):
+        assert relative_slot_number < CORES_PER_MACHINE
+        return self.id * CORES_PER_MACHINE + relative_slot_number
 #####################################################################################################################
 #####################################################################################################################
 # Legacy code for single slot workers - Eagle, IdealEagle, Hawk, DLWL and CLWL.
@@ -815,6 +832,11 @@ class Worker(object):
         return position_in_queue
 
     #Worker class
+    def get_machine_id_from_abs_slot_number(self, abs_slot_id):
+        return abs_slot_id / CORES_PER_MACHINE
+
+
+    #Worker class
     def get_next_probe_acc_to_srpt(self, current_time):
         min_remaining_exec_time = float('inf')
         position_in_queue       = -1
@@ -894,7 +916,7 @@ class Simulation(object):
 
         CUTOFF_THIS_EXP = float(small_job_th)
         TOTAL_MACHINES = int(nr_workers)
-        self.total_free_slots = SLOTS_PER_WORKER * TOTAL_MACHINES
+        self.total_free_slots = CORES_PER_MACHINE * TOTAL_MACHINES
         self.jobs = {}
         self.event_queue = Queue.PriorityQueue()
         self.workers = []
@@ -904,16 +926,17 @@ class Simulation(object):
         #Do not work with indexes. This is because small and big partition
         #workers may not always be contiguous. Change logic here to store
         #indices instead.
-        self.index_last_worker_of_small_partition = int(SMALL_PARTITION*TOTAL_MACHINES*SLOTS_PER_WORKER/100)-1
-        self.index_first_worker_of_big_partition  = int((100-BIG_PARTITION)*TOTAL_MACHINES*SLOTS_PER_WORKER/100)
+        self.index_last_worker_of_small_partition = int(SMALL_PARTITION*TOTAL_MACHINES*CORES_PER_MACHINE/100)-1
+        self.index_first_worker_of_big_partition  = int((100-BIG_PARTITION)*TOTAL_MACHINES*CORES_PER_MACHINE/100)
         # Only for Murmuration, first simulate machines which will simulate worker cores, which will simulate schedulers.
         if SYSTEM_SIMULATED != "Murmuration":
             while len(self.workers) < TOTAL_MACHINES:
-                worker = Worker(self, SLOTS_PER_WORKER, len(self.workers),self.index_last_worker_of_small_partition,self.index_first_worker_of_big_partition)
+                worker = Worker(self, CORES_PER_MACHINE, len(self.workers),self.index_last_worker_of_small_partition,self.index_first_worker_of_big_partition)
                 self.workers.append(worker)
         else:
+            # Murmuration
             while len(self.machines) < TOTAL_MACHINES:
-                machine = Machine(self, SLOTS_PER_WORKER, len(self.machines))
+                machine = Machine(self, CORES_PER_MACHINE, len(self.machines))
                 self.machines.append(machine)
                 workers = machine.cores
                 self.workers.extend(workers)
@@ -961,8 +984,8 @@ class Simulation(object):
         self.jobs_completed = 0
         self.scheduled_last_job = False
 
-        # Only for Murmuration will SLOTS_PER_WORKER be >= 1. For the rest, it is = 1.
-        self.cluster_status_keeper = ClusterStatusKeeper(TOTAL_MACHINES * SLOTS_PER_WORKER)
+        # Only for Murmuration will CORES_PER_MACHINE be >= 1. For the rest, it is = 1.
+        self.cluster_status_keeper = ClusterStatusKeeper(TOTAL_MACHINES * CORES_PER_MACHINE)
         self.stealing_allowed = stealing_allowed
         self.SCHEDULE_BIG_CENTRALIZED = SCHEDULE_BIG_CENTRALIZED
         self.WORKLOAD_FILE = WORKLOAD_FILE
@@ -985,7 +1008,6 @@ class Simulation(object):
             chosen_worker_indices.append(possible_worker_indices[rnd_index])
         return chosen_worker_indices
 
-
     #Simulation class
     def find_workers_long_job_prio(self, num_tasks, estimated_task_duration, current_time, simulation, hash_workers_considered):
         if hash_workers_considered == []:
@@ -996,14 +1018,14 @@ class Simulation(object):
         empty_nodes = []  #performance optimization
         for index in hash_workers_considered:
             qlen          = self.cluster_status_keeper.get_workers_queue_status(index)
+
             worker_obj    = simulation.workers[index]
             worker_id     = index
-
             if qlen == 0 :
                 empty_nodes.append(worker_id)
                 if(len(empty_nodes) == workers_needed):
                     break
-            else: 
+            else:
                 start_of_crt_big_task = worker_obj.tstamp_start_crt_big_task
                 assert(current_time >= start_of_crt_big_task)
                 adjusted_waiting_time = qlen
@@ -1044,6 +1066,61 @@ class Simulation(object):
 
         assert workers_needed == len(chosen_worker_indices)
         return chosen_worker_indices
+
+
+    #Simulation class
+    # In Murmuration, workers are multi-core machines
+    # Returns list of pair of machine and absolute core ids. [(m1, [c1, c2]), (m2, [c1, c2]),..]
+    # Length of list of cores = corresponding cpu_req for the task
+    # Ranking and update go hand-in-hand unlike in find_workers_long_job_prio() owing to different cpu requirements
+    # for different tasks.
+    # TODO: Other strategies - bulk allocation using well-fit, not best fit for tasks
+    # Hole filling strategies, etc
+    def find_workers_long_job_prio_murmuration(self, job_id, num_tasks, estimated_task_duration, current_time, simulation, hash_machines_considered, cpu_reqs_by_tasks):
+        if hash_machines_considered == []:
+            return []
+        assert num_tasks == len(cpu_reqs_by_tasks)
+        cores_lists_for_reqs_to_machine_matrix = {}
+        
+        # First, build per machine per cpu request estimted wait time and cores list.
+        for machine_id in hash_machines_considered:
+            machine = self.machines[machine_id]
+            # Returns ([est_time_at_machine...], [[list of absolute core ids],[],[]])
+            est_time_list, cores_list = self.cluster_status_keeper.get_machine_est_wait(machine, cpu_reqs_by_tasks)
+            est_time_list.append(machine_id) 
+            cores_lists_for_reqs_to_machine_matrix[machine_id] = {}
+            for index in range(len(cpu_reqs_by_tasks)):
+                cpu_req = cpu_reqs_by_tasks[index]
+                cores_lists_for_reqs_to_machine_matrix[machine_id][cpu_req] = cores_list[index]
+
+        # est_time_machine_array = [[est_time..., m1], [est_time, ...., m2], ... ]
+        est_time_machine_array = np.array(est_time_list)
+        # Start collapsing the matrix for best fit
+        # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
+        best_fit_for_tasks = []
+        for task_index in range(num_tasks):
+            # est_time_across_machines_for_this_task = [t1 t2 t3,... tM] for this task across machines
+            est_time_across_machines_for_this_task = est_time_array[:,task_index]
+            best_fit_time = np.sort(est_time_across_machines_for_this_task)[0]
+
+            #Fetch the machine with the best fit time for this task
+            row_index = np.where(est_time_across_machines_for_this_task == best_fit_time)[0][0]
+            chosen_machine = est_time_array[row_index][num_tasks]
+            cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine]
+            best_fit_for_tasks.append([chosen_machine, cores_at_chosen_machine])
+
+            #Update est time at this machine and its cores
+            self.cluster_status_keeper.update_workers_queue(cores_at_chosen_machine, True, estimated_task_duration, job_id, current_time)
+
+            # Update our internal matrix est_time_machine_array for subsequent tasks that might need these number of cpus
+            cpu_req = cpu_reqs_by_tasks[task_index]
+            est_time_list, cores_list = self.cluster_status_keeper.get_machine_est_wait(self.machines[chosen_machine], [cpu_req])
+            est_time_machine_array[row_index, 0: num_tasks -1] = est_time_list
+            cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req] = cores_list
+
+        # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
+        return best_fit_for_tasks
+
 
     #Simulation class
     def find_workers_dlwl(self, estimated_task_durations, workers_queue_status, current_time,simulation, hash_workers_considered):
@@ -1287,47 +1364,22 @@ class Simulation(object):
         job.scheduled_by = scheduler
         btmap = self.cluster_status_keeper.get_btmap()
         if long_job:
-            # Sort all workers running long jobs in this DC according to their queue lengths.
-            # Ranking policy used - Least loaded node AMONG ELIGIBLE NODES
-            # TODO - Change this to best fit node, by changing the number of slots per worker.
+            # Sort all workers running long jobs in this DC according to their estimated times.
+            # Ranking policy used - Least estimated time and hole duration > estimted task time.
             # btmap indicates workers where long jobs are running
-
-            ##### NEW NODE CHECK #####
-            # First check if nodes not yet running a long job can run one now.
-            # For this, the ratio of long job duration across all tasks to the
-            # total duration scheduled.
-            # = (all long task durations seen by all schedulers) / (number of schedulers * number of short jobs seen on this scheduler)
-            # Ceil ensures atleast one node.
-            possible_worker_indices = set(btmap.nonzero())
-            num_max_long_jobs_nodes = self.get_weighted_avg()
-            num_current_long_job_nodes = btmap.count()
-            new_long_node_workers = []
-            if num_current_long_job_nodes < num_max_long_jobs_nodes:
-                num_allowed = num_max_long_jobs_nodes - num_current_long_job_nodes
-                candidate_workers = set(range(TOTAL_MACHINES))
-                if btmap is not []:
-                    candidate_workers = candidate_workers - set(btmap.nonzero())
-                #Randomly consider workers not yet running a long job
-                if num_allowed < len(candidate_workers):
-                    new_long_node_workers = random.sample(candidate_workers, num_allowed)
-                else:
-                    new_long_node_workers = candidate_workers
-                possible_worker_indices = set(btmap.nonzero()) | set(new_long_node_workers)
-            else:
-                possible_worker_indices = (list(btmap.nonzero()))[0:num_max_long_jobs_nodes]
-            ##### NEW NODE CHECK #####
-
-            worker_indices = self.find_workers_long_job_prio(job.num_tasks, job.estimated_task_duration, current_time, self, possible_worker_indices)
+            machine_indices = self.find_workers_long_job_prio(job.num_tasks, job.estimated_task_duration, current_time, self, set(range(TOTAL_MACHINES)))
             # Update the cluster status for long jobs
-            self.cluster_status_keeper.update_workers_queue(worker_indices, True, job.estimated_task_duration, job.id, current_time)
-            for worker_id in worker_indices:
+            self.cluster_status_keeper.update_workers_queue(machine_indices, True, job.estimated_task_duration, job.id, current_time)
+            for machine_id in machine_indices:
                 task_arrival_events.append((current_time + NETWORK_DELAY,
-                     ProbeEvent(self.workers[worker_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+                     ProbeEvent(self.workers[machine_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
 
             # Return task arrival events for long jobs
             return task_arrival_events
 
         # This is for handling short jobs
+        print "Not expecting a short job"
+        assert False 
         possible_worker_indices = list(set(range(TOTAL_MACHINES)) - set(btmap.nonzero()))
         worker_indices = self.find_workers_random(PROBE_RATIO, job.num_tasks, possible_worker_indices, MIN_NR_PROBES)
         for worker_index in worker_indices:
@@ -1476,7 +1528,7 @@ CUTOFF_THIS_EXP                 = float(sys.argv[4])        #
 CUTOFF_BIG_SMALL                = float(sys.argv[5])        #
 SMALL_PARTITION                 = float(sys.argv[6])          #from the start of worker_indices
 BIG_PARTITION                   = float(sys.argv[7])          #from the end of worker_indices
-SLOTS_PER_WORKER                = int(sys.argv[8])
+CORES_PER_MACHINE                = int(sys.argv[8])
 PROBE_RATIO                     = int(sys.argv[9])
 MONITOR_INTERVAL                = int(sys.argv[10])
 ESTIMATION                      = sys.argv[11]              #MEAN, CONSTANT or RANDOM
