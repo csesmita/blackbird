@@ -99,9 +99,10 @@ class Job(object):
            # File contains actual durations of tasks followed by
            # cpu requested per task and cpu avg and max used per task
            self.unscheduled_tasks.appendleft(int(float(job_args[3 + i])))
-           self.cpu_reqs_by_tasks.appendleft(int(math.ceil(float(job_args[3 + i + self.num_tasks]))))
-           self.cpu_avg_per_task.appendleft(float(job_args[3 + i + 2*self.num_tasks]))
-           self.cpu_max_per_task.appendleft(float(job_args[3 + i + 3*self.num_tasks]))
+           # For Alibaba, normalize all cpu measurements by 100. 100 = 1 core.
+           self.cpu_reqs_by_tasks.appendleft(int(math.ceil(float(job_args[3 + i + self.num_tasks]))/100))
+           self.cpu_avg_per_task.appendleft(float(job_args[3 + i + 2*self.num_tasks])/100)
+           self.cpu_max_per_task.appendleft(float(job_args[3 + i + 3*self.num_tasks])/100)
         assert(len(self.unscheduled_tasks) == self.num_tasks)
 
     #Job class
@@ -319,27 +320,30 @@ class ClusterStatusKeeper():
 
     # ClusterStatusKeeper class
     # get_machine_est_wait() -
-    # Returns ([est_task1, est_task2, ...],[[list of cores],[list of core], [],...])
+    # Returns per task estimated wait time and list of cores that can accommodate that task at that estimated time.
+    # Returns - ([est_task1, est_task2, ...],[[list of cores],[list of core], [],...])
     # Might return smaller values for smaller cpu req, even if those requests come in later.
     def get_machine_est_wait(self, machine_obj, cpu_reqs):
         est_time_for_tasks = []
         cores_list_for_tasks = []
+        machine_queue_est = []
+        # Get an initial estimate for all cores on this machine.
+        for core in machine_obj.cores:
+            machine_queue_est.append((core.id , self.get_core_queue_status(core.id)))
+        # Sort cores based on least estimated times
+        machine_est_time = numpy.array(sorted(machine_queue_est, key=operator.itemgetter(1)), dtype='i')
+        print machine_est_time
         for cpu_req in cpu_reqs:
             # Number of cores requested has to be atleast equal to the number of cores on the machine
             # Filter out machines that have less than requested number of cores
             if len(machine_obj.cores) < cpu_req:
-                cores_list_for_tasks.append([])
                 est_time_for_tasks.append(float('inf'))
+                cores_list_for_tasks.append([])
                 continue
-            machine_queue_est = []
-            for core in machine_obj.cores:
-                machine_queue_est.append((core.id , self.get_core_queue_status(core.id)))
-            # Sort cores based on least estimated times for this cpu_req
-            machine_est_time = numpy.array(sorted(machine_queue_est, key=operator.itemgetter(1)), dtype='i')
             #cpu_req is available when the fastest cpu_req number of cores is available for use.
-            cores_list = list(machine_est_time[:cpu_req][:,0])
+            cores_list = list(machine_est_time[:,0][:cpu_req-1])
             cores_list_for_tasks.append(cores_list)
-            est_time = int(machine_est_time[cpu_req-1][0])
+            est_time = int(machine_est_time[cpu_req-1][1])
             est_time_for_tasks.append(est_time)
         assert len(est_time_for_tasks) == len(cpu_reqs)
         assert len(cores_list_for_tasks) == len(cpu_reqs)
@@ -360,6 +364,7 @@ class ClusterStatusKeeper():
     def get_core_queue_status(self, core_index):
         last_task_index = len(self.worker_queues[core_index]) - 1
         if last_task_index < 0:
+            # No pending task in queue
             return 0
         return self.worker_queues[core_index][last_task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION] + self.worker_queues[core_index][last_task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME]
 
@@ -876,6 +881,7 @@ class Scheduler(object):
         self.tasks_jobs_duration_buckets = [float('inf') for i in range(JOB_CHARACTERISTICS_NUM_BUCKETS)]
 
     # Scheduler class
+    # UNUSED
     # THE FOLLOWING FUNCTIONS ARE FOR ESTIMATING CUMULATIVE LONG TASKS DURATIONS
     def increment_task_job_type_duration(self, is_long, num_tasks, est_task_duration):
         self.total_tasks_jobs_duration += num_tasks * est_task_duration
@@ -901,6 +907,7 @@ class Scheduler(object):
 
     def get_task_job_type_duration(self):
         return (self.total_tasks_jobs_duration, self.long_tasks_jobs_duration)
+    # UNUSED
     # END - THE FOLLOWING FUNCTIONS ARE FOR ESTIMATING CUMULATIVE LONG TASKS DURATIONS
 
 #####################################################################################################################
@@ -1095,7 +1102,6 @@ class Simulation(object):
         # Start collapsing the matrix for best fit
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
         best_fit_for_tasks = []
-        cpu_reqs = numpy.array(cpu_reqs_by_tasks)
         for task_index in range(num_tasks):
             # est_time_across_machines_for_this_task = [t1 t2 t3,... tM] for this task across machines
             est_time_across_machines_for_this_task = est_time_machine_array[:,task_index]
@@ -1111,13 +1117,14 @@ class Simulation(object):
             #Update est time at this machine and its cores
             self.cluster_status_keeper.update_workers_queue(cores_at_chosen_machine, True, estimated_task_duration, job_id, current_time)
 
-            # Update our internal matrix est_time_machine_array for subsequent tasks that might need these number of cpus
-            est_time, core_list = self.cluster_status_keeper.get_machine_est_wait(self.machines[chosen_machine], [cpu_req])
-            cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req] = core_list[0]
-            # Find all columns where cpu_req is the same as here.
-            col_indices = numpy.where(cpu_reqs == cpu_req)[0]
-            for col_index in col_indices:
-                est_time_machine_array[row_index][col_index] = est_time[0]
+            # Update our internal matrix est_time_machine_array for subsequent tasks that might need these cpus from this machines
+            next_task_index = task_index + 1
+            while next_task_index < num_tasks:
+                cpu_req = cpu_reqs_by_tasks[next_task_index]
+                est_time, core_list = self.cluster_status_keeper.get_machine_est_wait(self.machines[chosen_machine], [cpu_req])
+                cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req] = core_list[0]
+                est_time_machine_array[row_index][next_task_index] = est_time[0]
+                next_task_index += 1
 
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
         return best_fit_for_tasks
@@ -1347,9 +1354,12 @@ class Simulation(object):
     # Contains optimization to sort workers just once
     def send_probes_murmuration(self, job, current_time, worker_indices, btmap):
         global stats
+        global time_for_send_probe_murmuration
+        global time_for_long_job_prio
         self.jobs[job.id] = job
         task_arrival_events = []
 
+        probe_start_time = time.time()
         # scheduler_index denotes the exactly one scheduler node ID where this job request lands.
         scheduler_index = worker_indices[0]
         scheduler = self.workers[scheduler_index].scheduler
@@ -1360,22 +1370,25 @@ class Simulation(object):
 
         long_job = job.job_type_for_scheduling == BIG
         tasks_left_to_place = len(job.unscheduled_tasks)
-        # Increment the counter for long or short job
-        scheduler.increment_task_job_type_duration(long_job, tasks_left_to_place, job.estimated_task_duration)
         job.scheduled_by = scheduler
         btmap = self.cluster_status_keeper.get_btmap()
+        assert long_job
         if long_job:
             # Sort all workers running long jobs in this DC according to their estimated times.
             # Ranking policy used - Least estimated time and hole duration > estimted task time.
             # btmap indicates workers where long jobs are running
             # Find workers and update the cluster status for long jobs
             # Returns - [[m1,[cores]], [m2,[cores]],...]
+            start_time = time.time()
             machine_indices = self.find_workers_long_job_prio_murmuration(job.id, job.num_tasks, job.estimated_task_duration, current_time, self, set(range(TOTAL_MACHINES)), job.cpu_reqs_by_tasks)
+            time_for_long_job_prio += time.time() - start_time
+            print machine_indices
             for machine_id in machine_indices:
                 for worker_id in machine_id[1]:
                     task_arrival_events.append((current_time + NETWORK_DELAY,
                          ProbeEvent(self.workers[worker_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
 
+            time_for_send_probe_murmuration += time.time() - probe_start_time
             # Return task arrival events for long jobs
             return task_arrival_events
 
@@ -1485,8 +1498,13 @@ class Simulation(object):
 
         while (not self.event_queue.empty()):
             current_time, event = self.event_queue.get()
-            assert current_time >= last_time
+            if current_time < last_time:
+                print "Got current time", current_time," less than last time", last_time
+                print "Last event", last_event
+                print "This event", event
+            #assert current_time >= last_time
             last_time = current_time
+            last_event = event
             new_events = event.run(current_time)
             for new_event in new_events:
                 self.event_queue.put(new_event)
@@ -1522,6 +1540,8 @@ if(len(sys.argv) != 26):
     sys.exit(1)
 
 utilization = 0
+time_for_long_job_prio = 0
+time_for_send_probe_murmuration = 0
 
 WORKLOAD_FILE                   = sys.argv[1]
 stealing                        = (sys.argv[2] == "yes")
@@ -1530,7 +1550,7 @@ CUTOFF_THIS_EXP                 = float(sys.argv[4])        #
 CUTOFF_BIG_SMALL                = float(sys.argv[5])        #
 SMALL_PARTITION                 = float(sys.argv[6])          #from the start of worker_indices
 BIG_PARTITION                   = float(sys.argv[7])          #from the end of worker_indices
-CORES_PER_MACHINE                = int(sys.argv[8])
+CORES_PER_MACHINE               = int(sys.argv[8])
 PROBE_RATIO                     = int(sys.argv[9])
 MONITOR_INTERVAL                = int(sys.argv[10])
 ESTIMATION                      = sys.argv[11]              #MEAN, CONSTANT or RANDOM
@@ -1563,6 +1583,8 @@ s = Simulation(MONITOR_INTERVAL, stealing, SCHEDULE_BIG_CENTRALIZED, WORKLOAD_FI
 s.run()
 
 print "Simulation ended in ", (time.time() - t1), " s "
+print "Long job prio time ", time_for_long_job_prio
+print "Probe time ", time_for_send_probe_murmuration - time_for_long_job_prio
 print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES, " workers is ", utilization
 
 finished_file.close()
