@@ -100,9 +100,9 @@ class Job(object):
            # cpu requested per task and cpu avg and max used per task
            self.unscheduled_tasks.appendleft(int(float(job_args[3 + i])))
            # For Alibaba, normalize all cpu measurements by 100. 100 = 1 core.
-           self.cpu_reqs_by_tasks.appendleft(int(math.ceil(float(job_args[3 + i + self.num_tasks]))/100))
-           self.cpu_avg_per_task.appendleft(float(job_args[3 + i + 2*self.num_tasks])/100)
-           self.cpu_max_per_task.appendleft(float(job_args[3 + i + 3*self.num_tasks])/100)
+           self.cpu_reqs_by_tasks.appendleft(int(math.ceil(float(job_args[3 + i + self.num_tasks]))))
+           self.cpu_avg_per_task.appendleft(float(job_args[3 + i + 2*self.num_tasks]))
+           self.cpu_max_per_task.appendleft(float(job_args[3 + i + 3*self.num_tasks]))
         assert(len(self.unscheduled_tasks) == self.num_tasks)
 
     #Job class
@@ -176,6 +176,7 @@ class JobArrival(Event, file):
             # TODO - Follow the pattern of rest of the schedulers and 
             # have the worker selection logic here.
             worker_indices.append(random.choice(self.simulation.scheduler_indices))
+            #print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
         elif not long_job:
             # Short job schedulers
             print current_time, ": Short Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
@@ -332,7 +333,6 @@ class ClusterStatusKeeper():
             machine_queue_est.append((core.id , self.get_core_queue_status(core.id)))
         # Sort cores based on least estimated times
         machine_est_time = numpy.array(sorted(machine_queue_est, key=operator.itemgetter(1)), dtype='i')
-        print machine_est_time
         for cpu_req in cpu_reqs:
             # Number of cores requested has to be atleast equal to the number of cores on the machine
             # Filter out machines that have less than requested number of cores
@@ -341,8 +341,9 @@ class ClusterStatusKeeper():
                 cores_list_for_tasks.append([])
                 continue
             #cpu_req is available when the fastest cpu_req number of cores is available for use.
-            cores_list = list(machine_est_time[:,0][:cpu_req-1])
+            cores_list = list(machine_est_time[:,0][:cpu_req])
             cores_list_for_tasks.append(cores_list)
+            assert len(cores_list) == cpu_req
             est_time = int(machine_est_time[cpu_req-1][1])
             est_time_for_tasks.append(est_time)
         assert len(est_time_for_tasks) == len(cpu_reqs)
@@ -954,8 +955,8 @@ class Simulation(object):
         self.ESTIMATION = ESTIMATION
         self.shared_cluster_status = {}
 
-        print "self.index_last_worker_of_small_partition:         ", self.index_last_worker_of_small_partition
-        print "self.index_first_worker_of_big_partition:          ", self.index_first_worker_of_big_partition
+        #print "self.index_last_worker_of_small_partition:         ", self.index_last_worker_of_small_partition
+        #print "self.index_first_worker_of_big_partition:          ", self.index_first_worker_of_big_partition
 
         self.small_partition_workers_hash =  {}
         self.big_partition_workers_hash = {}
@@ -973,9 +974,9 @@ class Simulation(object):
         for node in self.small_not_big_partition_workers:
             self.small_not_big_partition_workers_hash[node] = 1
 
-        print "Size of self.small_partition_workers_hash:         ", len(self.small_partition_workers_hash)
-        print "Size of self.big_partition_workers_hash:           ", len(self.big_partition_workers_hash)
-        print "Size of self.small_not_big_partition_workers_hash: ", len(self.small_not_big_partition_workers_hash)
+        #print "Size of self.small_partition_workers_hash:         ", len(self.small_partition_workers_hash)
+        #print "Size of self.big_partition_workers_hash:           ", len(self.big_partition_workers_hash)
+        #print "Size of self.small_not_big_partition_workers_hash: ", len(self.small_not_big_partition_workers_hash)
 
 
         self.free_slots_small_partition = len(self.small_partition_workers)
@@ -1122,6 +1123,8 @@ class Simulation(object):
             while next_task_index < num_tasks:
                 cpu_req = cpu_reqs_by_tasks[next_task_index]
                 est_time, core_list = self.cluster_status_keeper.get_machine_est_wait(self.machines[chosen_machine], [cpu_req])
+                assert len(est_time) == 1
+                assert len(core_list) == 1
                 cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req] = core_list[0]
                 est_time_machine_array[row_index][next_task_index] = est_time[0]
                 next_task_index += 1
@@ -1358,7 +1361,7 @@ class Simulation(object):
         global time_for_long_job_prio
         self.jobs[job.id] = job
         task_arrival_events = []
-
+ 
         probe_start_time = time.time()
         # scheduler_index denotes the exactly one scheduler node ID where this job request lands.
         scheduler_index = worker_indices[0]
@@ -1382,7 +1385,6 @@ class Simulation(object):
             start_time = time.time()
             machine_indices = self.find_workers_long_job_prio_murmuration(job.id, job.num_tasks, job.estimated_task_duration, current_time, self, set(range(TOTAL_MACHINES)), job.cpu_reqs_by_tasks)
             time_for_long_job_prio += time.time() - start_time
-            print machine_indices
             for machine_id in machine_indices:
                 for worker_id in machine_id[1]:
                     task_arrival_events.append((current_time + NETWORK_DELAY,
@@ -1518,8 +1520,8 @@ class Simulation(object):
         total_busyness = 0
         for worker in self.workers:
             total_busyness += worker.busy_time
-        utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * TOTAL_MACHINES))
-        print "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES, " workers is ", utilization
+        utilization = 100 * (float(total_busyness) / float(time_elapsed_in_dc * TOTAL_MACHINES*CORES_PER_MACHINE))
+        print "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES * CORES_PER_MACHINE, " cores is ", utilization
 
 #####################################################################################################################
 #globals
