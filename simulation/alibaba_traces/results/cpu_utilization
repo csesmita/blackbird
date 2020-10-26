@@ -1,0 +1,23 @@
+######### Machine Stats #######
+Total number of machines (from machine_meta) 4034
+Total number of machines running containers (from container_meta) 4005
+Total number of machines not running containers 24
+Total number of machines not running containers (from machine_usage - container_meta) 24
+Total number of machines running batch instances (from batch_instances) 3867
+Total number of machines running ONLY batch instances (from batch_instances - container_meta) 11
+Total number of machines running ONLY container instances (from container_meta - batch_instances) 149
+Total number of machines running BOTH container AND batch instances (from container_meta.intersection(batch_instances)) 3856
+Machines in machine_meta but not in container or batch meta set(['m_1406', 'm_1440', 'm_1495', 'm_1583', 'm_1726', 'm_1802', 'm_192', 'm_1980', 'm_2251', 'm_2751', 'm_2823', 'm_3277', 'm_3344', 'm_3404', 'm_3417', 'm_3603', 'm_466', 'm_556', 'm_695'])
+######### CPU Utilization Stats #######
+Mean CPU utilization for machines hosting containers only 7.546135771973241
+25th 4.0 50th -  5.0
+90th 18.0 99th -  24.0
+Mean CPU utilization for machines hosting batch only 26.673456888640626
+25th 17.0 50th -  26.0
+90th 47.0 99th -  76.0
+Mean CPU utilization for machines hosting both batch and container 39.45047676129988
+25th 29.0 50th -  38.0
+90th 59.0 99th -  81.0
+Mean CPU utilization for machines hosting neither batch or container 0.9023938189451118
+25th 0.0 50th -  0.0
+90th 3.0 99th -  3.0

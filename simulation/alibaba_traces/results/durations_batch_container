@@ -1,0 +1,17 @@
+#### BATCH ####
+Mean task durations over all jobs is 72.15743171645596  sec
+Median average task durations over jobs is 6.666666666666667 sec
+90th and 99th percentile average task durations are  161.66666666666666 sec and  785.2828571428586 sec
+Mean job durations over all jobs is 1341.9917057940272  sec
+Median average task durations over jobs is 9.0 sec
+90th and 99th percentile average task durations are  322.0 sec and  1417.4400000000023 sec
+Mean task cpus over all jobs is 82.42451561102385
+Median average task cpus over jobs is 100.0
+90th and 99th percentile average task cpus are  100.0 and  400.0
+#### BATCH ####
+
+#### CONTAINER ####
+Mean task cpus over all jobs is 524.3985486969985
+Median average task cpus over jobs is 400.0
+90th and 99th percentile average task cpus are  800.0 and  1600.0
+#### CONTAINER ####
