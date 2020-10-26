@@ -1,0 +1,6 @@
+Cluster Size 	8000	((Scheduler Time	Task Wait Time	Task Processing Time))
+50th percentile: 	865.4025	(0.000499999994645	0.0	675.0)
+90th percentile: 	3050.6015000000016	(0.000500000001921	332.20380000000097	2433.8)
+99th percentile: 	7585.186279999974	(0.000500000001921	5464.989959999993	5630.659999999991)
+Average utilization in  Murmuration  with  8000  workers is  42.2139353284
+

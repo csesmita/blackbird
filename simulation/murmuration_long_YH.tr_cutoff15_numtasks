@@ -1,0 +1,18 @@
+Cluster Size 	2000	((Scheduler Time	Task Wait Time	Task Processing Time))
+50th percentile: 	96030.6495	(0.000499999994645	95704.16200000001	35.0)
+90th percentile: 	160604.895	(0.000500000001921	160384.9066	621.7000000000007)
+99th percentile: 	185444.13793	(0.000500000001921	185179.37928999998	3189.699999999997)
+Average utilization in  Murmuration  with  2000  workers is  80.9863887985
+
+Cluster Size 	8000	((Scheduler Time	Task Wait Time	Task Processing Time))
+50th percentile: 	49.0015	(0.000499999994645	0.0	35.0)
+90th percentile: 	967.0015	(0.000500000001921	0.0	621.7000000000007)
+99th percentile: 	7988.14193	(0.000500000001921	7646.260999999995	3189.699999999997)
+Average utilization in  Murmuration  with  8000  workers is  42.2139353284
+
+Cluster Size 	12000	((Scheduler Time	Task Wait Time	Task Processing Time))
+50th percentile: 	48.0015	(0.000499999994645	0.0	35.0)
+90th percentile: 	750.7015000000007	(0.000500000001921	0.0	621.7000000000007)
+99th percentile: 	4066.9814999999953	(0.000500000001921	9.601	3189.699999999997)
+Average utilization in  Murmuration  with  12000  workers is  28.1426235523
+
