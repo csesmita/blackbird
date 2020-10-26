@@ -43,7 +43,6 @@ if(len(sys.argv) != 6):
 # Process the finished file which has the job response times recorded
 # pypy process.py finished_file eagle short yahoo 4000 
 infile = open(sys.argv[1], 'r')
-outfile = open(sys.argv[2].lower()+"_"+sys.argv[3]+"_"+sys.argv[4], 'a+')
 jobrunningtime = []
 schedulertime = []
 waittime = []
@@ -77,12 +76,14 @@ jobrunningtime.sort()
 schedulertime.sort()
 waittime.sort()
 processingtime.sort()
-outfile.write("%s\t%s\t(%s\t%s\t%s)\n"% ("Cluster Size ", sys.argv[5], "(Scheduler Time", "Task Wait Time", "Task Processing Time)"))
-outfile.write("%s\t%s\t(%s\t%s\t%s)\n"% ("50th percentile: ",  np.percentile(jobrunningtime, 50), np.percentile(schedulertime, 50), np.percentile(waittime, 50), np.percentile(processingtime, 50))) 
-outfile.write("%s\t%s\t(%s\t%s\t%s)\n" % ("90th percentile: ", np.percentile(jobrunningtime, 90), np.percentile(schedulertime, 90), np.percentile(waittime, 90), np.percentile(processingtime, 90))) 
-outfile.write("%s\t%s\t(%s\t%s\t%s)\n" % ("99th percentile: ", np.percentile(jobrunningtime, 99), np.percentile(schedulertime, 99), np.percentile(waittime, 99), np.percentile(processingtime, 99)))
+if len(jobrunningtime) > 0:
+    outfile = open(sys.argv[2].lower()+"_"+sys.argv[3]+"_"+sys.argv[4], 'a+')
+    outfile.write("%s\t%s\t(%s\t%s\t%s)\n"% ("Cluster Size ", sys.argv[5], "(Scheduler Time", "Task Wait Time", "Task Processing Time)"))
+    outfile.write("%s\t%s\t(%s\t%s\t%s)\n"% ("50th percentile: ",  np.percentile(jobrunningtime, 50), np.percentile(schedulertime, 50), np.percentile(waittime, 50), np.percentile(processingtime, 50))) 
+    outfile.write("%s\t%s\t(%s\t%s\t%s)\n" % ("90th percentile: ", np.percentile(jobrunningtime, 90), np.percentile(schedulertime, 90), np.percentile(waittime, 90), np.percentile(processingtime, 90))) 
+    outfile.write("%s\t%s\t(%s\t%s\t%s)\n" % ("99th percentile: ", np.percentile(jobrunningtime, 99), np.percentile(schedulertime, 99), np.percentile(waittime, 99), np.percentile(processingtime, 99)))
 
-# Copy in utilization informartion
-if utilization != "":
-    outfile.write("%s\n"% (utilization))
-outfile.close()
+    # Copy in utilization informartion
+    if utilization != "":
+        outfile.write("%s\n"% (utilization))
+    outfile.close()
