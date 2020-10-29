@@ -96,13 +96,16 @@ class Job(object):
     #Job class
     def file_task_execution_time(self, job_args):
         for i in range(self.num_tasks):
-           # File contains actual durations of tasks followed by
-           # cpu requested per task and cpu avg and max used per task
-           self.unscheduled_tasks.appendleft(int(float(job_args[3 + i])))
-           # For Alibaba, normalize all cpu measurements by 100. 100 = 1 core.
-           self.cpu_reqs_by_tasks.appendleft(int(math.ceil(float(job_args[3 + i + self.num_tasks]))))
-           self.cpu_avg_per_task.appendleft(float(job_args[3 + i + 2*self.num_tasks]))
-           self.cpu_max_per_task.appendleft(float(job_args[3 + i + 3*self.num_tasks]))
+           self.unscheduled_tasks.appendleft((float(job_args[3 + i])))
+           if len(job_args) > 3 + self.num_tasks:
+               # For Alibaba, normalize all cpu measurements by 100. 100 = 1 core.
+               # File contains actual durations of tasks followed by
+               # cpu requested per task and cpu avg and max used per task
+               self.cpu_reqs_by_tasks.appendleft(int(math.ceil(float(job_args[3 + i + self.num_tasks]))))
+               self.cpu_avg_per_task.appendleft(float(job_args[3 + i + 2*self.num_tasks]))
+               self.cpu_max_per_task.appendleft(float(job_args[3 + i + 3*self.num_tasks]))
+           else:
+               self.cpu_reqs_by_tasks.appendleft(int(1))
         assert(len(self.unscheduled_tasks) == self.num_tasks)
 
     #Job class
@@ -344,7 +347,7 @@ class ClusterStatusKeeper():
             cores_list = list(machine_est_time[:,0][:cpu_req])
             cores_list_for_tasks.append(cores_list)
             assert len(cores_list) == cpu_req
-            est_time = int(machine_est_time[cpu_req-1][1])
+            est_time = float(machine_est_time[cpu_req-1][1])
             est_time_for_tasks.append(est_time)
         assert len(est_time_for_tasks) == len(cpu_reqs)
         assert len(cores_list_for_tasks) == len(cpu_reqs)
@@ -363,11 +366,17 @@ class ClusterStatusKeeper():
     # TODO - This accounts for holes when estimating time.
     # Can machines keep track of holes across cores to better fit other incoming tasks?
     def get_core_queue_status(self, core_index):
-        last_task_index = len(self.worker_queues[core_index]) - 1
-        if last_task_index < 0:
-            # No pending task in queue
-            return 0
-        return self.worker_queues[core_index][last_task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION] + self.worker_queues[core_index][last_task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME]
+        core_queue = self.worker_queues[core_index]
+        # If task is already waiting when previous task finishes, then add task duration only.
+        # Else, add arrival time and task duration
+        # Accounts for holes in last task completion and arrival of next task
+        current_finish_time = 0.0
+        for task_index in range(len(core_queue)):
+            if core_queue[task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME] <= current_finish_time:
+                current_finish_time += core_queue[task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION]
+            else:
+                current_finish_time = core_queue[task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME] + core_queue[task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION]
+        return current_finish_time
 
     # ClusterStatusKeeper class
     def get_btmap(self):
@@ -381,7 +390,7 @@ class ClusterStatusKeeper():
             if increase:
                 # Append (arrival_time_at_worker, task_duration, job_id) to the end of tasks list
                 tasks.append([arrival_time_at_worker, duration, job_id])
-                #print "Appending task entry", duration, job_id," to worker_queue at worker", worker
+                #print "[", arrival_time_at_worker,"] Appending task entry", duration, job_id," to worker_queue at worker", worker
                 self.btmap.set(worker)
             else:
                 # Search for the first entry with this (task_duration, jobid) and pop the task
@@ -394,7 +403,7 @@ class ClusterStatusKeeper():
                         tasks.pop(task_index)
                         break
                     task_index += 1
-                assert task_index < original_task_queue_length, (" offending value for task_duration: %r %r %i" % (duration,job_id,worker))
+                assert task_index < original_task_queue_length, (" %r %r - offending value for task_duration: %r %r %i" % (task_index, original_task_queue_length, duration,job_id,worker))
                 if(len(tasks) == 0):
                     self.btmap.flip(worker)
 
@@ -1080,13 +1089,13 @@ class Simulation(object):
     # TODO: Other strategies - bulk allocation using well-fit, not best fit for tasks
     # Hole filling strategies, etc
     def find_workers_long_job_prio_murmuration(self, job_id, num_tasks, estimated_task_duration, current_time, simulation, hash_machines_considered, cpu_reqs_by_tasks):
+        assert num_tasks == len(cpu_reqs_by_tasks)
         if hash_machines_considered == []:
             return []
-        assert num_tasks == len(cpu_reqs_by_tasks)
         cores_lists_for_reqs_to_machine_matrix = {}
         est_time_list = []
 
-        # First, build per machine per cpu request estimted wait time and cores list.
+        # First, build per machine per cpu request estimated wait time and cores list.
         for machine_id in hash_machines_considered:
             machine = self.machines[machine_id]
             # Returns ([est_time_at_machine...], [[list of absolute core ids],[],[]])
@@ -1113,10 +1122,12 @@ class Simulation(object):
             chosen_machine = int(est_time_machine_array[row_index][num_tasks])
             cpu_req = cpu_reqs_by_tasks[task_index]
             cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req]
+            #print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", estimated_task_duration," current time ", current_time
             best_fit_for_tasks.append([chosen_machine, cores_at_chosen_machine])
 
             #Update est time at this machine and its cores
             self.cluster_status_keeper.update_workers_queue(cores_at_chosen_machine, True, estimated_task_duration, job_id, current_time)
+            #print "with updated core wait time ", self.cluster_status_keeper.get_core_queue_status(cores_at_chosen_machine[0])
 
             # Update our internal matrix est_time_machine_array for subsequent tasks that might need these cpus from this machines
             next_task_index = task_index + 1
@@ -1384,11 +1395,15 @@ class Simulation(object):
             # Returns - [[m1,[cores]], [m2,[cores]],...]
             start_time = time.time()
             machine_indices = self.find_workers_long_job_prio_murmuration(job.id, job.num_tasks, job.estimated_task_duration, current_time, self, set(range(TOTAL_MACHINES)), job.cpu_reqs_by_tasks)
+            assert len(machine_indices) == job.num_tasks
             time_for_long_job_prio += time.time() - start_time
+            #print "Got machine indices",
             for machine_id in machine_indices:
+                #print machine_id[0],":",machine_id[1],
                 for worker_id in machine_id[1]:
                     task_arrival_events.append((current_time + NETWORK_DELAY,
                          ProbeEvent(self.workers[worker_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+            #print ""
 
             time_for_send_probe_murmuration += time.time() - probe_start_time
             # Return task arrival events for long jobs
@@ -1593,7 +1608,6 @@ finished_file.close()
 load_file.close()
 
 # Generate CDF data
-os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "short" + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES))
 os.system("pypy process.py finished_file "+ SYSTEM_SIMULATED + " " + "long" + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES))
 
 print >> stats_file, "STATS_SH_PROBES_ASSIGNED_IN_BP:      ",    stats.STATS_SH_PROBES_ASSIGNED_IN_BP
