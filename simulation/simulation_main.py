@@ -282,11 +282,27 @@ class WorkerHeartbeatEvent(Event):
 
         return new_events
 
+#####################################################################################################################
+#####################################################################################################################
+
+class ProbeEventForMachines(Event):
+    def __init__(self, machine, core_ids, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, job_type_for_scheduling):
+        self.machine = machine
+        self.worker_indices = core_ids
+        self.job_id = job_id
+        self.task_index = task_index
+        self.task_cpu_request = task_cpu_request
+        self.task_actual_duration = task_actual_duration
+        self.estimated_job_duration = estimated_task_duration
+        self.job_type_for_scheduling = job_type_for_scheduling
+
+    def run(self, current_time):
+        return self.machine.add_machine_probe(self.worker_indices, self.job_id, self.task_index, self.task_cpu_request, self.task_actual_duration, self.estimated_job_duration, self.job_type_for_scheduling, current_time)
 
 #####################################################################################################################
 #####################################################################################################################
 
-class ProbeEvent(Event):
+class ProbeEventForWorkers(Event):
     def __init__(self, worker, job_id, task_length, job_type_for_scheduling, btmap):
         self.worker = worker
         self.job_id = job_id
@@ -478,10 +494,17 @@ class Machine(object):
             core = Worker(simulation, 1, core_id, core_id, 0)
             self.cores.append(core)
 
+        #Enqueued tasks at this machine
+        self.queued_probes = []
+
     #Machine class
     def get_abs_slot_number_from_machine(self, relative_slot_number):
         assert relative_slot_number < CORES_PER_MACHINE
         return self.id * CORES_PER_MACHINE + relative_slot_number
+
+    def add_machine_probe(self, worker_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_job_duration, job_type_for_scheduling, current_time):
+        self.queued_probes.append([worker_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_job_duration, True, 0, False, -1, current_time])
+
 #####################################################################################################################
 #####################################################################################################################
 # Legacy code for single slot workers - Eagle, IdealEagle, Hawk, DLWL and CLWL.
@@ -1209,7 +1232,7 @@ class Simulation(object):
 
         probe_events = []
         for worker_index in worker_indices:
-            probe_events.append((current_time + NETWORK_DELAY, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+            probe_events.append((current_time + NETWORK_DELAY, ProbeEventForWorkers(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
             job.probed_workers.add(worker_index)
         return probe_events
 
@@ -1223,7 +1246,7 @@ class Simulation(object):
         for worker_index in worker_list:
             if(not self.workers[worker_index].executing_big and not self.workers[worker_index].queued_big):
                 probe_time = current_time + NETWORK_DELAY*(roundnr/2+1)
-                probe_events.append((probe_time, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, None)))
+                probe_events.append((probe_time, ProbeEventForWorkers(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, None)))
                 job.probed_workers.add(worker_index)
                 successful_worker_indices.append(worker_index)
             if (self.workers[worker_index].btmap_tstamp > freshest_btmap_tstamp):
@@ -1266,7 +1289,7 @@ class Simulation(object):
 
         if (job.job_type_for_scheduling == BIG):
             for worker_index in worker_indices:
-                probe_events.append((current_time + NETWORK_DELAY, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+                probe_events.append((current_time + NETWORK_DELAY, ProbeEventForWorkers(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
                 job.probed_workers.add(worker_index)
 
         else:
@@ -1404,6 +1427,15 @@ class Simulation(object):
                     task_arrival_events.append((current_time + NETWORK_DELAY,
                          ProbeEvent(self.workers[worker_id], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
             #print ""
+            '''
+            for index in range(len(machine_indices)):
+                machine_allocation = machine_indices[index]
+                machine_id = machine_allocation[0]
+                cores_ids = machine_allocation[1]
+                assert len(core_ids) == job.cpu_reqs_by_tasks[index]
+                task_arrival_events.append((current_time + NETWORK_DELAY,
+                     ProbeEventForMachines(self.machines[machine_id], core_ids, job.id, index, job.cpu_reqs_by_tasks[index], job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+            '''
 
             time_for_send_probe_murmuration += time.time() - probe_start_time
             # Return task arrival events for long jobs
@@ -1415,7 +1447,7 @@ class Simulation(object):
         possible_worker_indices = list(set(range(TOTAL_MACHINES)) - set(btmap.nonzero()))
         worker_indices = self.find_workers_random(PROBE_RATIO, job.num_tasks, possible_worker_indices, MIN_NR_PROBES)
         for worker_index in worker_indices:
-            task_arrival_events.append((current_time + NETWORK_DELAY, ProbeEvent(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
+            task_arrival_events.append((current_time + NETWORK_DELAY, ProbeEventForWorkers(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
         return task_arrival_events
 
 
