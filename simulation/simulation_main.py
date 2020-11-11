@@ -49,6 +49,7 @@ class Job(object):
         self.completed_tasks_count = 0
         self.end_time = self.start_time
         self.unscheduled_tasks = collections.deque()
+        self.actual_task_duration = collections.deque()
         self.cpu_reqs_by_tasks = collections.deque()
         self.cpu_avg_per_task = collections.deque()
         self.cpu_max_per_task = collections.deque()
@@ -65,6 +66,7 @@ class Job(object):
         elif task_distribution == TaskDurationDistributions.CONSTANT:
             while len(self.unscheduled_tasks) < self.num_tasks:
                 self.unscheduled_tasks.appendleft(int(mean_task_duration))
+                self.actual_task_duration.appendleft(int(mean_task_duration))
 
         self.estimate_distribution = estimate_distribution
 
@@ -97,6 +99,7 @@ class Job(object):
     def file_task_execution_time(self, job_args):
         for i in range(self.num_tasks):
            self.unscheduled_tasks.appendleft((float(job_args[3 + i])))
+           self.actual_task_duration.appendleft((float(job_args[3 + i])))
            if len(job_args) > 3 + self.num_tasks:
                # For Alibaba, normalize all cpu measurements by 100. 100 = 1 core.
                # File contains actual durations of tasks followed by
@@ -194,7 +197,7 @@ class JobArrival(Event, file):
             worker_indices = self.simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, possible_worker_indices,MIN_NR_PROBES)
         else:
             # Long job schedulers
-            print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
+            #print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
             btmap = self.simulation.cluster_status_keeper.get_btmap()
 
             if (SYSTEM_SIMULATED == "DLWL"):
@@ -524,9 +527,9 @@ class TaskEndEvent():
 
 
 class TaskEndEventForMachines():
-    def __init__(self, simulation, worker_indices, SCHEDULE_BIG_CENTRALIZED, status_keeper, job_id, job_type_for_scheduling, task_duration, estimated_task_duration, this_task_id, num_cores):
+    def __init__(self, simulation, worker_index, SCHEDULE_BIG_CENTRALIZED, status_keeper, job_id, job_type_for_scheduling, task_duration, estimated_task_duration, this_task_id, num_cores):
         self.simulation = simulation
-        self.worker_indices = worker_indices
+        self.worker_index = worker_index
         self.SCHEDULE_BIG_CENTRALIZED = SCHEDULE_BIG_CENTRALIZED
         self.status_keeper = status_keeper
         self.job_id = job_id
@@ -538,16 +541,14 @@ class TaskEndEventForMachines():
 
     def run(self, current_time):
         assert self.SCHEDULE_BIG_CENTRALIZED
-        self.status_keeper.update_machine_queue(self.worker_indices, False, self.task_duration, self.job_id, current_time, self.this_task_id, self.num_cores)
+        self.status_keeper.update_machine_queue([self.worker_index], False, self.task_duration, self.job_id, current_time, self.this_task_id, self.num_cores)
 
         del Job.per_job_task_info[self.job_id][self.this_task_id]
 
-        for worker_id in self.worker_indices:
-            worker = self.simulation.workers[worker_id]
-            worker.tstamp_start_crt_big_task =- 1
-            worker.free_slot(current_time)
+        worker = self.simulation.workers[self.worker_index]
+        worker.tstamp_start_crt_big_task =- 1
 
-        return []
+        return worker.free_slot(current_time)
 
 
 #####################################################################################################################
@@ -576,9 +577,6 @@ class Machine(object):
 
         #Enqueued tasks at this machine
         self.queued_probes = []
-
-        #Estimate the busyness of this machine
-        self.busy_time = 0
 
     #Machine class
     def add_machine_probe(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, job_type_for_scheduling, current_time):
@@ -615,7 +613,6 @@ class Machine(object):
         task_actual_duration = task_info[4]
         estimated_task_duration = task_info[5]
         probe_arrival_time = task_info[10]
-
         #Check if the next queued task can be run
         num_cores_available = len(self.free_cores.keys())
         if num_cores_available < task_cpu_request:
@@ -641,7 +638,7 @@ class Machine(object):
 
         # Finally, process the first task with all these parameters
         task_status, events = self.simulation.get_machine_task(self, new_core_ids, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, current_time, probe_arrival_time)
-        self.queued_probes.pop()
+        self.queued_probes.pop(0)
         return events
 
 
@@ -1564,7 +1561,7 @@ class Simulation(object):
         assert scheduler is not None
 
         long_job = job.job_type_for_scheduling == BIG
-        tasks_left_to_place = len(job.unscheduled_tasks)
+        tasks_left_to_place = (job.num_tasks)
         job.scheduled_by = scheduler
         btmap = self.cluster_status_keeper.get_btmap()
         assert long_job
@@ -1575,7 +1572,7 @@ class Simulation(object):
             # btmap indicates workers where long jobs are running
             # Find workers and update the cluster status for long jobs
             # Returns - [[m1,[cores]], [m2,[cores]],...]
-            machine_indices = self.find_workers_long_job_prio_murmuration(job.id, job.num_tasks, job.estimated_task_duration, current_time, self, set(range(TOTAL_MACHINES)), job.cpu_reqs_by_tasks, job.unscheduled_tasks)
+            machine_indices = self.find_workers_long_job_prio_murmuration(job.id, job.num_tasks, job.estimated_task_duration, current_time, self, set(range(TOTAL_MACHINES)), job.cpu_reqs_by_tasks, job.actual_task_duration)
             assert len(machine_indices) == job.num_tasks
             time_for_long_job_prio += time.time() - start_time
             for index in range(len(machine_indices)):
@@ -1584,7 +1581,7 @@ class Simulation(object):
                 core_ids = machine_allocation[1]
                 assert len(core_ids) == job.cpu_reqs_by_tasks[index]
                 task_arrival_events.append((current_time + NETWORK_DELAY,
-                     ProbeEventForMachines(self.machines[machine_id], core_ids, job.id, index, job.cpu_reqs_by_tasks[index], job.unscheduled_tasks[index], job.estimated_task_duration, job.job_type_for_scheduling)))
+                     ProbeEventForMachines(self.machines[machine_id], core_ids, job.id, index, job.cpu_reqs_by_tasks[index], job.actual_task_duration[index], job.estimated_task_duration, job.job_type_for_scheduling)))
 
             time_for_send_probe_murmuration += time.time() - probe_start_time
             # Return task arrival events for long jobs
@@ -1660,12 +1657,16 @@ class Simulation(object):
 
         Job.per_job_task_info[job_id][task_index] = current_time
         events = []
+        assert job.actual_task_duration[task_index] == task_duration
         job.unscheduled_tasks.remove(task_duration)
-        # Machine busy time should be a sum of worker busy times.
         assert task_cpu_request == len(core_indices)
-        machine.busy_time += task_duration * task_cpu_request
+        # Machine busy time should be a sum of worker busy times.
+        workers = self.workers
+        for worker_id in core_indices:
+            workers[worker_id].busy_time += task_duration 
         task_completion_time = task_duration + current_time
-        #print current_time, " machine:", machine.id, " task from job ", job_id, " task duration: ", task_duration, " will finish at time ", task_completion_time
+        #print current_time, " machine:", machine.id, core_indices, " task from job ", job_id, " task index: ", task_index," task duration: ", task_duration, " will finish at time ", task_completion_time
+
         is_job_complete = job.update_task_completion_details(task_completion_time)
 
         if is_job_complete:
@@ -1673,7 +1674,8 @@ class Simulation(object):
             # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time + Machine queue wait time + Task processing time
             print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job_id, " scheduler_algorithm_time ", scheduler_algorithm_time, " task_wait_time ", task_wait_time, " task_processing_time ", task_duration
 
-        events.append((task_completion_time, TaskEndEventForMachines(self, core_indices, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, task_duration, estimated_task_duration, task_index, task_cpu_request)))
+        for core_index in core_indices:
+            events.append((task_completion_time, TaskEndEventForMachines(self, core_index, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, task_duration, estimated_task_duration, task_index, task_cpu_request)))
 
         if len(job.unscheduled_tasks) == 0:
             logging.info("Finished scheduling tasks for job %s" % job.id)
