@@ -360,6 +360,7 @@ class ClusterStatusKeeper():
             machine_queue_est.append((core.id , self.get_core_queue_status(core.id)))
 
         # Sort cores based on least estimated times
+        # This converts the estimated time float into an integer.
         machine_est_time = numpy.array(sorted(machine_queue_est, key=operator.itemgetter(1)), dtype='i')
 
         # Get estimate for each task based on cores requested, and the list of cores available.
@@ -447,7 +448,7 @@ class ClusterStatusKeeper():
             if increase:
                 # Append (arrival_time_at_worker, task_duration, job_id, task_id, num_cores) to the end of tasks list
                 tasks.append([arrival_time_at_worker, duration, job_id, task_id, num_cores])
-                #print "[", arrival_time_at_worker,"] Appending task entry", duration, job_id,task_id, num_cores" to worker_queue at worker", worker
+                #print "[", arrival_time_at_worker,"] Appending task entry", duration, job_id,task_id, num_cores," to worker_queue at worker", worker
                 self.btmap.set(worker)
             else:
                 # Search for the first entry with this (jobid, task_id) and pop the task
@@ -464,7 +465,7 @@ class ClusterStatusKeeper():
                         tasks.pop(task_index)
                         break
                     task_index += 1
-                assert task_index < original_task_queue_length, (" %r %r - offending value for task_duration: %r %r %i" % (task_index, original_task_queue_length, duration,job_id,task_id, num_cores, worker))
+                assert task_index < original_task_queue_length, (" %r %r - offending value for task_duration: %r %i %i %i %i" % (task_index, original_task_queue_length, duration,job_id,task_id, num_cores, worker))
                 if(len(tasks) == 0):
                     self.btmap.flip(worker)
 
@@ -568,11 +569,11 @@ class Machine(object):
             self.cores.append(core)
 
         # Dictionary of core and time when it was freed (used to track the time the core spent idle).
-        self.free_cores = {}
+        self.free_cores = []
         index = 0
         while index < self.num_cores:
             core_id = self.cores[index].id
-            self.free_cores[core_id] = 0
+            self.free_cores.append(core_id)
             index += 1
 
         #Enqueued tasks at this machine
@@ -581,14 +582,11 @@ class Machine(object):
     #Machine class
     def add_machine_probe(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, job_type_for_scheduling, current_time):
         self.queued_probes.append([core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, True, 0, False, -1, current_time])
-
         return self.try_process_next_probe_in_the_queue(current_time)
 
     def free_machine_core(self, worker, current_time):
         core_index = worker.id
-
-        # Exactly one entry per free core indicating the latest time
-        self.free_cores[core_index] = current_time
+        self.free_cores.append(core_index)
 
         worker.executing_big              = False
         worker.queued_big                 = worker.queued_big -1
@@ -613,31 +611,18 @@ class Machine(object):
         task_actual_duration = task_info[4]
         estimated_task_duration = task_info[5]
         probe_arrival_time = task_info[10]
-        #Check if the next queued task can be run
-        num_cores_available = len(self.free_cores.keys())
-        if num_cores_available < task_cpu_request:
-            # Not yet ready for service
-            # TODO - Check for exact cores which were initially assigned?
+
+        if(not all(x in self.free_cores for x in core_indices)):
+            # Assigned core indices for this task not yet available.
             return []
 
-        # Assign free cores to service this task
-        # TODO: Note - these may be different from core_indices. Is that OK?
-        num_cores = 0
-        new_core_ids = []
-        for core_id in self.free_cores.keys():
-            new_core_ids.append(core_id)
-            core_free_time = self.free_cores[core_id]
-            assert core_free_time <= current_time
-            del self.free_cores[core_id]
-            num_cores += 1
-            if num_cores == task_cpu_request:
-                break
-
-        # No redundant probes in Murmuration, so there should be unscheduled tasks
-        assert len(self.simulation.jobs[job_id].unscheduled_tasks) > 0
+        for core_id in core_indices:
+            self.free_cores.remove(core_id)
 
         # Finally, process the first task with all these parameters
-        task_status, events = self.simulation.get_machine_task(self, new_core_ids, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, current_time, probe_arrival_time)
+        assert len(self.simulation.jobs[job_id].unscheduled_tasks) > 0
+        task_status, events = self.simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, current_time, probe_arrival_time)
+
         self.queued_probes.pop(0)
         return events
 
@@ -844,7 +829,6 @@ class Worker(object):
         if SYSTEM_SIMULATED == "Murmuration":
             assert False, "Murmuration shouldn't be invoking worker.process_next_probe_in_the_queue()"
         global stats
-
         self.free_slots.pop(0)
         self.simulation.decrease_free_slots_for_load_tracking(self)
         
@@ -1305,18 +1289,16 @@ class Simulation(object):
 
             #Update est time at this machine and its cores
             self.cluster_status_keeper.update_machine_queue(cores_at_chosen_machine, True, task_actual_durations[task_index], job_id, current_time, task_index, cpu_req)
-            #print "with updated core wait time ", self.cluster_status_keeper.get_core_queue_status(cores_at_chosen_machine[0])
 
-            # Update our internal matrix est_time_machine_array for subsequent tasks that might need these cpus from this machines
+            # Update our internal matrix est_time_machine_array for only the next task estimate for this chosen machine
             next_task_index = task_index + 1
-            while next_task_index < num_tasks:
+            if next_task_index < num_tasks:
                 cpu_req = cpu_reqs_by_tasks[next_task_index]
                 est_time, core_list = self.cluster_status_keeper.get_machine_est_wait(self.machines[chosen_machine], [cpu_req], current_time)
                 assert len(est_time) == 1
                 assert len(core_list) == 1
+                est_time_machine_array[chosen_machine][next_task_index] = est_time[0] 
                 cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req] = core_list[0]
-                est_time_machine_array[row_index][next_task_index] = est_time[0]
-                next_task_index += 1
 
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
         return best_fit_for_tasks
@@ -1677,6 +1659,7 @@ class Simulation(object):
         for core_index in core_indices:
             events.append((task_completion_time, TaskEndEventForMachines(self, core_index, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, task_duration, estimated_task_duration, task_index, task_cpu_request)))
 
+
         if len(job.unscheduled_tasks) == 0:
             logging.info("Finished scheduling tasks for job %s" % job.id)
 
@@ -1730,7 +1713,7 @@ class Simulation(object):
                 print "Got current time", current_time," less than last time", last_time
                 print "Last event", last_event
                 print "This event", event
-            #assert current_time >= last_time
+            assert current_time >= last_time
             last_time = current_time
             last_event = event
             new_events = event.run(current_time)
