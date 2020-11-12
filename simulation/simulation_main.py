@@ -569,11 +569,11 @@ class Machine(object):
             self.cores.append(core)
 
         # Dictionary of core and time when it was freed (used to track the time the core spent idle).
-        self.free_cores = []
+        self.free_cores = {}
         index = 0
         while index < self.num_cores:
             core_id = self.cores[index].id
-            self.free_cores.append(core_id)
+            self.free_cores[core_id] = 0
             index += 1
 
         #Enqueued tasks at this machine
@@ -586,8 +586,7 @@ class Machine(object):
 
     def free_machine_core(self, worker, current_time):
         core_index = worker.id
-        self.free_cores.append(core_index)
-
+        self.free_cores[core_index] = current_time
         worker.executing_big              = False
         worker.queued_big                 = worker.queued_big -1
         worker.tstamp_start_crt_big_task  = current_time
@@ -600,6 +599,7 @@ class Machine(object):
             return []
 
         global stats
+
         #First of the queued tasks
         task_info = self.queued_probes[0]
 
@@ -612,17 +612,22 @@ class Machine(object):
         estimated_task_duration = task_info[5]
         probe_arrival_time = task_info[10]
 
-        if(not all(x in self.free_cores for x in core_indices)):
+        if(not all(x in self.free_cores.keys() for x in core_indices)):
             # Assigned core indices for this task not yet available.
             return []
 
+        core_available_time = 0
         for core_id in core_indices:
-            self.free_cores.remove(core_id)
+            time = self.free_cores[core_id]
+            if core_available_time < time:
+                core_available_time = time
+            del self.free_cores[core_id]
 
+        # Take the larger of the probe arrival time and core free time to determine when the task starts executing.
+        processing_start_time = core_available_time if core_available_time > probe_arrival_time else probe_arrival_time
         # Finally, process the first task with all these parameters
         assert len(self.simulation.jobs[job_id].unscheduled_tasks) > 0
-        task_status, events = self.simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, current_time, probe_arrival_time)
-
+        task_status, events = self.simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, processing_start_time, probe_arrival_time)
         self.queued_probes.pop(0)
         return events
 
