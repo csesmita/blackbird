@@ -1816,7 +1816,7 @@ s.run()
 print "Simulation ended in ", (time.time() - t1), " s "
 print "Long job prio time ", time_for_long_job_prio
 print "Probe time ", time_for_send_probe_murmuration - time_for_long_job_prio
-print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES, " workers is ", utilization
+print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine is ", utilization
 
 finished_file.close()
 load_file.close()
