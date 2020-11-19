@@ -535,7 +535,7 @@ class TaskEndEvent():
 
 
 class TaskEndEventForMachines():
-    def __init__(self, simulation, worker_index, SCHEDULE_BIG_CENTRALIZED, status_keeper, job_id, job_type_for_scheduling, task_duration, estimated_task_duration, this_task_id, num_cores):
+    def __init__(self, simulation, worker_index, SCHEDULE_BIG_CENTRALIZED, status_keeper, job_id, job_type_for_scheduling, task_duration, estimated_task_duration, this_task_id, num_cores, delete_task_entry):
         self.simulation = simulation
         self.worker_index = worker_index
         self.SCHEDULE_BIG_CENTRALIZED = SCHEDULE_BIG_CENTRALIZED
@@ -546,6 +546,7 @@ class TaskEndEventForMachines():
         self.estimated_task_duration = estimated_task_duration
         self.this_task_id = this_task_id
         self.num_cores = num_cores
+        self.delete_task_entry = delete_task_entry
 
     def run(self, current_time):
         if SYSTEM_SIMULATED == "Hawk":
@@ -554,7 +555,8 @@ class TaskEndEventForMachines():
         if self.SCHEDULE_BIG_CENTRALIZED == True:
             self.status_keeper.update_machine_queue([self.worker_index], False, self.task_duration, self.job_id, current_time, self.this_task_id, self.num_cores)
 
-        del Job.per_job_task_info[self.job_id][self.this_task_id]
+        if self.delete_task_entry:
+            del Job.per_job_task_info[self.job_id][self.this_task_id]
 
         worker = self.simulation.workers[self.worker_index]
         worker.tstamp_start_crt_big_task =- 1
@@ -682,8 +684,6 @@ class Machine(object):
 
             # Remove redundant probes for this task without accounting for them in response time.
             if task_actual_duration not in self.simulation.jobs[job_id].unscheduled_tasks:
-                #get_task_response_time = current_time + 2 * NETWORK_DELAY
-                #events.append([(get_task_response_time, NoopGetTaskResponseEvent(self))])
                 self.queued_probes.pop(pos)
                 continue
 
@@ -1686,7 +1686,7 @@ class Simulation(object):
                 machine_allocation = machine_indices[index]
                 machine_id = machine_allocation[0]
                 core_ids = machine_allocation[1]
-                assert len(core_ids) == job.cpu_reqs_by_tasks[index]
+                assert len(core_ids) == job.cpu_reqs_by_tasks[index], "Not enough machines that pass filter requirement of job"
                 task_arrival_events.append((current_time + NETWORK_DELAY,
                      ProbeEventForMachines(self.machines[machine_id], core_ids, job.id, index, job.cpu_reqs_by_tasks[index], job.actual_task_duration[index], job.estimated_task_duration, job.job_type_for_scheduling)))
 
@@ -1781,8 +1781,11 @@ class Simulation(object):
             # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time + Machine queue wait time + Task processing time
             print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job_id, " scheduler_algorithm_time ", scheduler_algorithm_time, " task_wait_time ", task_wait_time, " task_processing_time ", task_duration
 
+        count = 0
         for core_index in core_indices:
-            events.append((task_completion_time, TaskEndEventForMachines(self, core_index, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, task_duration, estimated_task_duration, task_index, task_cpu_request)))
+            count += 1
+            is_last_core_freed = (count == task_cpu_request)
+            events.append((task_completion_time, TaskEndEventForMachines(self, core_index, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, task_duration, estimated_task_duration, task_index, task_cpu_request, is_last_core_freed)))
 
 
         if len(job.unscheduled_tasks) == 0:
