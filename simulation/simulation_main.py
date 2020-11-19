@@ -99,15 +99,20 @@ class Job(object):
         for i in range(self.num_tasks):
            self.unscheduled_tasks.appendleft((float(job_args[3 + i])))
            self.actual_task_duration.appendleft((float(job_args[3 + i])))
+           cores_needed = 1
            if len(job_args) > 3 + self.num_tasks:
                # For Alibaba, normalize all cpu measurements by 100. 100 = 1 core.
                # File contains actual durations of tasks followed by
                # cpu requested per task and cpu avg and max used per task
                self.cpu_reqs_by_tasks.appendleft(int(math.ceil(float(job_args[3 + i + self.num_tasks]))))
-               self.cpu_avg_per_task.appendleft(float(job_args[3 + i + 2*self.num_tasks]))
-               self.cpu_max_per_task.appendleft(float(job_args[3 + i + 3*self.num_tasks]))
+               #self.cpu_avg_per_task.appendleft(float(job_args[3 + i + 2*self.num_tasks]))
+               #self.cpu_max_per_task.appendleft(float(job_args[3 + i + 3*self.num_tasks]))
            else:
-               self.cpu_reqs_by_tasks.appendleft(int(1))
+               # HACK! Instead of changing traces file, make this value multi core instead
+               self.cpu_reqs_by_tasks.appendleft(cores_needed)
+               cores_needed += 1
+               if cores_needed == CORES_PER_MACHINE:
+                   cores_needed = 1
         assert(len(self.unscheduled_tasks) == self.num_tasks)
 
     #Job class
@@ -313,6 +318,8 @@ class ProbeEventForWorkers(Event):
     def __init__(self, worker, job_id, task_length, job_type_for_scheduling, btmap):
         if SYSTEM_SIMULATED == "Murmuration":
             assert False, "Murmuration should not invoke ProbeEventForWorkers or worker.add_probe()"
+        if SYSTEM_SIMULATED == "Hawk":
+            assert False, "Hawk should not invoke ProbeEventForWorkers or worker.add_probe()"
         self.worker = worker
         self.job_id = job_id
         self.task_length = task_length
@@ -759,6 +766,8 @@ class Worker(object):
     def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap, handle_stealing):
         if SYSTEM_SIMULATED == "Murmuration":
             assert False, "Murmuration should not invoke ProbeEventForWorkers or worker.add_probe()"
+        if SYSTEM_SIMULATED == "Hawk":
+            assert False, "Hawk should not invoke ProbeEventForWorkers or worker.add_probe()"
         global stats
         long_job = job_type_for_scheduling == BIG
         if (not long_job and handle_stealing == False and (self.executing_big == True or self.queued_big > 0)):
@@ -912,6 +921,8 @@ class Worker(object):
     def process_next_probe_in_the_queue(self, current_time):
         if SYSTEM_SIMULATED == "Murmuration":
             assert False, "Murmuration shouldn't be invoking worker.process_next_probe_in_the_queue()"
+        if SYSTEM_SIMULATED == "Hawk":
+            assert False, "Hawk shouldn't be invoking worker.process_next_probe_in_the_queue()"
         global stats
         self.free_slots.pop(0)
         self.simulation.decrease_free_slots_for_load_tracking(self)
@@ -1772,7 +1783,10 @@ class Simulation(object):
         for worker_id in core_indices:
             workers[worker_id].busy_time += task_duration 
         task_completion_time = task_duration + current_time
-        #print current_time, " machine:", machine.id, core_indices, " task from job ", job_id, " task index: ", task_index," task duration: ", task_duration, " will finish at time ", task_completion_time
+        if SYSTEM_SIMULATED == "Hawk":
+            #Account for time for the probe to get task data and details.
+            task_completion_time += 2 * NETWORK_DELAY
+        print current_time, " machine:", machine.id, core_indices, " task from job ", job_id, " task index: ", task_index," task duration: ", task_duration, " will finish at time ", task_completion_time
 
         is_job_complete = job.update_task_completion_details(task_completion_time)
 
