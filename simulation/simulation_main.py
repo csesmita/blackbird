@@ -81,7 +81,6 @@ class Job(object):
             assert(self.estimated_task_duration <= int(top))
             assert(self.estimated_task_duration >= int(bottom))
 
-        self.probed_workers = set()
         self.remaining_exec_time = self.estimated_task_duration*len(self.unscheduled_tasks)
         # Remember the scheduler that scheduled this job
         self.scheduled_by = None
@@ -220,7 +219,12 @@ class JobArrival(Event, file):
                     self.simulation.cluster_status_keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration, self.job.id, current_time)
 
             else:
-                worker_indices = self.simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, self.simulation.big_partition_workers,MIN_NR_PROBES)
+                # Long job - Sparrow
+                if SYSTEM_SIMULATED == "Hawk":
+                    worker_indices = self.simulation.find_machines_random(PROBE_RATIO, self.job.num_tasks, set(range(TOTAL_MACHINES)), MIN_NR_PROBES, self.job.cpu_reqs_by_tasks)
+
+                else:
+                    worker_indices = self.simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, self.simulation.big_partition_workers,MIN_NR_PROBES)
 
         Job.per_job_task_info[self.job.id] = {}
         for tasknr in range(0,self.job.num_tasks):
@@ -413,6 +417,7 @@ class ClusterStatusKeeper():
     # ClusterStatusKeeper class
     def update_workers_queue(self, worker_indices, increase, duration, job_id, arrival_time_at_worker):
         assert SYSTEM_SIMULATED != "Murmuration", "update_workers_queue() should not be called for Murmuration"
+        assert SYSTEM_SIMULATED != "Hawk", "update_workers_queue() should not be called for Hawk"
         for worker in worker_indices:
             # tasks is of the form -  [[10, 20, 1], [20, 20, 1], ...]
             tasks = self.worker_queues[worker]
@@ -497,6 +502,7 @@ class UpdateRemainingTimeEvent(Event):
 class TaskEndEvent():
     def __init__(self, worker, SCHEDULE_BIG_CENTRALIZED, status_keeper, job_id, job_type_for_scheduling, estimated_task_duration, this_task_id):
         assert SYSTEM_SIMULATED != "Murmuration", "TaskEndEvent should not be called for Murmuration"
+        assert SYSTEM_SIMULATED != "Hawk", "TaskEndEvent should not be called for Hawk"
         self.worker = worker
         self.SCHEDULE_BIG_CENTRALIZED = SCHEDULE_BIG_CENTRALIZED
         self.status_keeper = status_keeper
@@ -507,6 +513,7 @@ class TaskEndEvent():
 
     def run(self, current_time):
         assert SYSTEM_SIMULATED != "Murmuration", "TaskEndEvent should not be called for Murmuration"
+        assert SYSTEM_SIMULATED != "Hawk", "TaskEndEvent should not be called for Hawk"
         global stats
         stats.STATS_TASKS_TOTAL_FINISHED += 1
         if(self.job_type_for_scheduling != BIG):
@@ -541,8 +548,11 @@ class TaskEndEventForMachines():
         self.num_cores = num_cores
 
     def run(self, current_time):
-        assert self.SCHEDULE_BIG_CENTRALIZED
-        self.status_keeper.update_machine_queue([self.worker_index], False, self.task_duration, self.job_id, current_time, self.this_task_id, self.num_cores)
+        if SYSTEM_SIMULATED == "Hawk":
+            assert self.SCHEDULE_BIG_CENTRALIZED == False, "Sparrow trying to schedule in a centralized manner?"
+
+        if self.SCHEDULE_BIG_CENTRALIZED == True:
+            self.status_keeper.update_machine_queue([self.worker_index], False, self.task_duration, self.job_id, current_time, self.this_task_id, self.num_cores)
 
         del Job.per_job_task_info[self.job_id][self.this_task_id]
 
@@ -596,6 +606,9 @@ class Machine(object):
     #Machine class
     # Try to process as many queued probes as possible.
     def try_process_next_probe_in_the_queue(self, current_time):
+        if SYSTEM_SIMULATED == "Hawk":
+            return self.try_process_next_random_probe(current_time)
+
         global stats
 
         events = []
@@ -642,6 +655,62 @@ class Machine(object):
         return events
 
 
+    #Machine class
+    # Try to process as many queued probes as possible.
+    def try_process_next_random_probe(self, current_time):
+        global stats
+
+        events = []
+        pos = 0
+        while True:
+            if len(self.queued_probes) == 0 or len(self.free_cores) == 0 or pos == len(self.queued_probes):
+                #Nothing to execute, or nowhere to execute
+                break
+
+            #First of the queued tasks
+            task_info = self.queued_probes[pos]
+
+            # Extract all information
+            core_indices = task_info[0]
+            assert len(core_indices) == 0
+            job_id = task_info[1]
+            task_index = task_info[2]
+            task_cpu_request = task_info[3]
+            task_actual_duration = task_info[4]
+            estimated_task_duration = task_info[5]
+            probe_arrival_time = task_info[6]
+
+            # Remove redundant probes for this task without accounting for them in response time.
+            if task_actual_duration not in self.simulation.jobs[job_id].unscheduled_tasks:
+                #get_task_response_time = current_time + 2 * NETWORK_DELAY
+                #events.append([(get_task_response_time, NoopGetTaskResponseEvent(self))])
+                self.queued_probes.pop(pos)
+                continue
+
+            if len(self.free_cores.keys()) < task_cpu_request:
+                # Required core indices for this task not yet available.
+                pos += 1
+                continue
+
+            core_indices = self.free_cores.keys()[0 :task_cpu_request]
+            core_available_time = 0
+            for core_id in core_indices:
+                time = self.free_cores[core_id]
+                if core_available_time < time:
+                    core_available_time = time
+                del self.free_cores[core_id]
+
+            # Take the larger of the probe arrival time and core free time to determine when the task starts executing.
+            processing_start_time = core_available_time if core_available_time > probe_arrival_time else probe_arrival_time
+
+            # Finally, process the current task with all these parameters
+            task_status, new_events = self.simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, processing_start_time, probe_arrival_time)
+            for new_event in new_events:
+                events.append((new_event[0], new_event[1]))
+            self.queued_probes.pop(pos)
+
+        return events
+
 #####################################################################################################################
 #####################################################################################################################
 # Legacy code for single slot workers - Eagle, IdealEagle, Hawk, DLWL and CLWL.
@@ -653,7 +722,7 @@ class Worker(object):
 
         # List of times when slots were freed, for each free slot (used to track the time the worker spends idle).
         # Only in the case of Murmuration, these are managed at the machine level.
-        if SYSTEM_SIMULATED != "Murmuration":
+        if SYSTEM_SIMULATED != "Murmuration" and SYSTEM_SIMULATED != "Hawk":
             self.free_slots = []
             while len(self.free_slots) < num_slots:
                 self.free_slots.append(0)
@@ -716,7 +785,7 @@ class Worker(object):
     #Worker class
     # In Murmuration, free_slot will report the same to the machine class.
     def free_slot(self, current_time):
-        if SYSTEM_SIMULATED == "Murmuration":
+        if SYSTEM_SIMULATED == "Murmuration" or SYSTEM_SIMULATED == "Hawk":
             machine_id = self.simulation.get_machine_id_from_worker_id(self.id)
             machine = self.simulation.machines[machine_id]
             return machine.free_machine_core(self, current_time)
@@ -1112,12 +1181,12 @@ class Simulation(object):
         self.index_last_worker_of_small_partition = int(SMALL_PARTITION*TOTAL_MACHINES*CORES_PER_MACHINE/100)-1
         self.index_first_worker_of_big_partition  = int((100-BIG_PARTITION)*TOTAL_MACHINES*CORES_PER_MACHINE/100)
         # Only for Murmuration, first simulate machines which will simulate worker cores, which will simulate schedulers.
-        if SYSTEM_SIMULATED != "Murmuration":
+        if SYSTEM_SIMULATED != "Murmuration" and SYSTEM_SIMULATED != "Hawk":
             while len(self.workers) < TOTAL_MACHINES:
                 worker = Worker(self, CORES_PER_MACHINE, len(self.workers),self.index_last_worker_of_small_partition,self.index_first_worker_of_big_partition)
                 self.workers.append(worker)
         else:
-            # Murmuration
+            # Murmuration and Hawk
             while len(self.machines) < TOTAL_MACHINES:
                 machine = Machine(self, CORES_PER_MACHINE, len(self.machines))
                 self.machines.append(machine)
@@ -1127,7 +1196,8 @@ class Simulation(object):
                     if worker.scheduler is not None:
                         # Directly access scheduler indices in Simulation class
                         self.scheduler_indices.append(worker.id)
-            print "Number of schedulers ", len(self.scheduler_indices)
+            if SYSTEM_SIMULATED == "Murmuration":
+                print "Number of schedulers ", len(self.scheduler_indices)
 
         self.worker_indices = range(TOTAL_MACHINES)
         self.off_mean_bottom = off_mean_bottom
@@ -1182,6 +1252,28 @@ class Simulation(object):
     #Simulation class
     def get_machine_id_from_worker_id(self, worker_id):
         return worker_id / CORES_PER_MACHINE
+
+    #Simulation class
+    def find_machines_random(self, probe_ratio, nr_tasks, possible_machine_indices, min_probes, cores_requested):
+        #print "Number of workers for short job", len(possible_worker_indices), "and num tasks", nr_tasks
+        if possible_machine_indices == []:
+            return []
+        assert len(cores_requested) == nr_tasks
+        chosen_machine_indices = []
+        nr_probes = max(probe_ratio*nr_tasks,min_probes)
+        # Recalculate probe_ratio incase min_probes are chosen.
+        probe_ratio = nr_probes / nr_tasks
+        task_index = 0
+        for task_index in range(0, nr_tasks):
+            nr_cores_requested = cores_requested[task_index]
+            probe_index = 0
+            while probe_index < probe_ratio:
+                chosen_machine_id = random.sample(possible_machine_indices, 1)[0]
+                if len(self.machines[chosen_machine_id].cores) >= nr_cores_requested:
+                    chosen_machine_indices.append(chosen_machine_id)
+                    probe_index += 1
+        return chosen_machine_indices
+
 
 
     #Simulation class
@@ -1370,7 +1462,7 @@ class Simulation(object):
     #Simulation class
     def send_probes(self, job, current_time, worker_indices, btmap):
         if SYSTEM_SIMULATED == "Hawk" or SYSTEM_SIMULATED == "IdealEagle":
-            return self.send_probes_hawk(job, current_time, worker_indices, btmap)
+            return self.send_machine_probes_hawk(job, current_time, worker_indices, btmap)
         if SYSTEM_SIMULATED == "Eagle":
             return self.send_probes_eagle(job, current_time, worker_indices, btmap)
         if SYSTEM_SIMULATED == "CLWL":
@@ -1380,6 +1472,23 @@ class Simulation(object):
         if SYSTEM_SIMULATED == "Murmuration":
             return self.send_probes_murmuration(job, current_time, worker_indices, btmap)
 
+
+    #Simulation class
+    def send_machine_probes_hawk(self, job, current_time, machine_indices, btmap):
+        self.jobs[job.id] = job
+        task_arrival_events = []
+        nr_probes = max(PROBE_RATIO * job.num_tasks, MIN_NR_PROBES)
+        #Recalculate for the case when nr_probes == min_probes.
+        probe_ratio = nr_probes / job.num_tasks
+        assert probe_ratio * job.num_tasks == len(machine_indices)
+        for index in range(len(machine_indices)):
+            machine_id = machine_indices[index]
+            for probe_index in range(probe_ratio):
+                task_index = index / probe_ratio
+                # The exact cores are a matter of availability at the machine.
+                task_arrival_events.append((current_time + NETWORK_DELAY,
+                     ProbeEventForMachines(self.machines[machine_id], [], job.id, task_index, job.cpu_reqs_by_tasks[task_index], job.actual_task_duration[task_index], job.estimated_task_duration, job.job_type_for_scheduling)))
+        return task_arrival_events
 
     #Simulation class
     def send_probes_hawk(self, job, current_time, worker_indices, btmap):
@@ -1402,7 +1511,6 @@ class Simulation(object):
             if(not self.workers[worker_index].executing_big and not self.workers[worker_index].queued_big):
                 probe_time = current_time + NETWORK_DELAY*(roundnr/2+1)
                 probe_events.append((probe_time, ProbeEventForWorkers(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, None)))
-                job.probed_workers.add(worker_index)
                 successful_worker_indices.append(worker_index)
             if (self.workers[worker_index].btmap_tstamp > freshest_btmap_tstamp):
                 id_worker_with_newest_btmap = worker_index
@@ -1445,7 +1553,6 @@ class Simulation(object):
         if (job.job_type_for_scheduling == BIG):
             for worker_index in worker_indices:
                 probe_events.append((current_time + NETWORK_DELAY, ProbeEventForWorkers(self.workers[worker_index], job.id, job.estimated_task_duration, job.job_type_for_scheduling, btmap)))
-                job.probed_workers.add(worker_index)
 
         else:
             missing_probes = len(worker_indices)
