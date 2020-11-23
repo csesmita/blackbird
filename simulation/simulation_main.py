@@ -616,7 +616,7 @@ class Machine(object):
     # Try to process as many queued probes as possible.
     def try_process_next_probe_in_the_queue(self, current_time):
         if SYSTEM_SIMULATED == "Hawk":
-            return self.try_process_next_random_probe(current_time)
+            return self.try_process_next_random_probe_single(current_time)
 
         global stats
 
@@ -717,6 +717,62 @@ class Machine(object):
             self.queued_probes.pop(pos)
 
         return events
+
+    #Machine class
+    # Try to process as many queued probes as possible.
+    def try_process_next_random_probe_single(self, current_time):
+        global stats
+
+        events = []
+        pos = 0
+        while True:
+            if len(self.queued_probes) == 0 or len(self.free_cores) == 0 or pos == len(self.queued_probes):
+                #Nothing to execute, or nowhere to execute
+                break
+
+            #First of the queued tasks
+            task_info = self.queued_probes[pos]
+
+            # Extract all information
+            core_indices = task_info[0]
+            assert len(core_indices) == 0
+            job_id = task_info[1]
+            task_index = task_info[2]
+            task_cpu_request = task_info[3]
+            task_actual_duration = task_info[4]
+            estimated_task_duration = task_info[5]
+            probe_arrival_time = task_info[6]
+
+            # Remove redundant probes for this task without accounting for them in response time.
+            if task_actual_duration not in self.simulation.jobs[job_id].unscheduled_tasks:
+                self.queued_probes.pop(pos)
+                continue
+
+            if len(self.free_cores.keys()) < task_cpu_request:
+                # Required core indices for this task not yet available.
+                break
+
+            core_indices = self.free_cores.keys()[0 :task_cpu_request]
+            core_available_time = 0
+            for core_id in core_indices:
+                time = self.free_cores[core_id]
+                if core_available_time < time:
+                    core_available_time = time
+                del self.free_cores[core_id]
+
+            # Take the larger of the probe arrival time and core free time to determine when the task starts executing.
+            processing_start_time = core_available_time if core_available_time > probe_arrival_time else probe_arrival_time
+
+            # Finally, process the current task with all these parameters
+            task_status, new_events = self.simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, processing_start_time, probe_arrival_time)
+            for new_event in new_events:
+                events.append((new_event[0], new_event[1]))
+            self.queued_probes.pop(pos)
+            break
+
+        return events
+
+
 
 #####################################################################################################################
 #####################################################################################################################
