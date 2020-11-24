@@ -17,6 +17,7 @@ import copy
 import collections
 import os
 import numpy
+import bisect
 
 class TaskDurationDistributions:
     CONSTANT, MEAN, FROM_FILE  = range(3)
@@ -340,6 +341,7 @@ class ClusterStatusKeeper():
     INDEX_OF_JOB_ID = 2
     INDEX_OF_TASK_ID = 3
     INDEX_OF_NUM_CORES = 4
+    INDEX_OF_BEST_FIT_TIME = 5
     #In Murmuration, worker is the absolute core id, unique to every core in every machine of the DC.
     def __init__(self, num_workers):
         # worker_queues is a key value pair of worker indices and queued tasks.
@@ -359,35 +361,65 @@ class ClusterStatusKeeper():
     # Returns per task estimated wait time and list of cores that can accommodate that task at that estimated time.
     # Returns - ([est_task1, est_task2, ...],[[list of cores],[list of core], [],...])
     # Might return smaller values for smaller cpu req, even if those requests come in later.
-    # TODO - Currently this function does not take in task duration. If it
-    # does, then it can place tasks in an out of order fashion to fill holes.
-    def get_machine_est_wait(self, machine_obj, cpu_reqs, current_time):
+    def get_machine_est_wait(self, machine_obj, cpu_reqs, arrival_time, task_durations):
+        assert len(cpu_reqs) == len(task_durations)
         est_time_for_tasks = []
         cores_list_for_tasks = []
-        machine_queue_est = []
+        machine_queue_est = {}
 
-        # Get an initial estimate for all cores on this machine.
+        # Get list of free times for all cores on this machine.
+        # [core_id,[[s1,e1], ... [sn, inf]], [core_id,[[s1,e1], ... [sn, inf]], ... ]
+        # list[core_id_index][0] = core_id
+        # list[core_id_index][1] = [[s1,e1], ... [sn, inf]] - List of holes available
         for core in machine_obj.cores:
-            machine_queue_est.append((core.id , self.get_core_queue_status(core.id)))
+            machine_queue_est[core.id] = self.get_core_queue_status(core.id, arrival_time)
 
-        # Sort cores based on least estimated times
-        # This converts the estimated time float into an integer.
-        machine_est_time = numpy.array(sorted(machine_queue_est, key=operator.itemgetter(1)), dtype='i')
-
-        # Get estimate for each task based on cores requested, and the list of cores available.
-        for cpu_req in cpu_reqs:
+        # Generate all possible holes to fit each task (D=task duration, N = num cpus needed)
+        for index in range(len(cpu_reqs)):
+            cpu_req = cpu_reqs[index]
+            task_duration = task_durations[index]
             # Number of cores requested has to be atleast equal to the number of cores on the machine
             # Filter out machines that have less than requested number of cores
             if len(machine_obj.cores) < cpu_req:
                 est_time_for_tasks.append(float('inf'))
                 cores_list_for_tasks.append([])
                 continue
-            #cpu_req is available when the fastest cpu_req number of cores is available for use.
-            cores_list = list(machine_est_time[:,0][:cpu_req])
-            assert len(cores_list) == cpu_req
-            cores_list_for_tasks.append(cores_list)
-            est_time = float(machine_est_time[cpu_req-1][1])
-            est_time_for_tasks.append(est_time)
+            all_slots_list = []
+            all_slots_list_cores = collections.defaultdict(set)
+            #Special handling of infinite hole.
+            #It needs to be added to other infinite hole sets greater than this start time.
+            inf_hole_start = {}
+            for core in machine_obj.cores:
+                for hole in range(len(machine_queue_est[core.id])):
+                    if machine_queue_est[core.id][hole][1] != float('inf'):
+                        # Find all possible holes with granularity of 1 time unit
+                        arr = ((np.arange(machine_queue_est[core.id][hole][0], machine_queue_est[core.id][hole][1] - task_duration + 1, time_granularity)))
+                        for start in arr:
+                            bisect.insort(all_slots_list, start)
+                            all_slots_list_cores[start].add(core.id)
+                    else:
+                        start = machine_queue_est[core.id][hole][0]
+                        bisect.insort(all_slots_list, start)
+                        all_slots_list_cores[start].add(core.id)
+                        inf_hole_start[core.id] = start
+
+            for core, inf_start in inf_hole_start.items():
+                for start in all_slots_list_cores.keys():
+                    if start > inf_start:
+                        all_slots_list_cores[start].add(core)
+
+            #Arrange in smallest overlapping holes
+            start_times = sorted(set(all_slots_list))
+            for start_time in start_times:
+                if len(all_slots_list_cores[start_time]) >= cpu_req:
+                    cores_list = random.sample(all_slots_list_cores[start_time], cpu_req)
+                    #print "Earliest start time for task", index," (duration - ", task_duration,") needing", cpu_req,"cores is ", start_time, "with cores", cores_list
+                    # cpu_req is available when the fastest cpu_req number of cores is
+                    # available for use at or after arrival_time.
+                    cores_list_for_tasks.append(cores_list)
+                    est_time_for_tasks.append(start_time)
+                    break
+
         assert len(est_time_for_tasks) == len(cpu_reqs)
         assert len(cores_list_for_tasks) == len(cpu_reqs)
         return (est_time_for_tasks, cores_list_for_tasks)
@@ -402,20 +434,34 @@ class ClusterStatusKeeper():
         return estimated_time
 
     # ClusterStatusKeeper class
-    # TODO - This accounts for holes when estimating time.
-    # Can machines keep track of holes across cores to better fit other incoming tasks?
-    def get_core_queue_status(self, core_index):
+    # Sends back a list of free times - start and end times after arrival time.
+    # Last entry has an end time of infinite.
+    # [s1, e1], [s2, e2],...[sn, float('inf')]
+    # TODO - Ensure these are strictly ordered in time.
+    def get_core_queue_status(self, core_index, arrival_time):
         core_queue = self.worker_queues[core_index]
         # If task is already waiting when previous task finishes, then add task duration only.
         # Else, add arrival time and task duration
         # Accounts for holes in last task completion and arrival of next task
+        free_times = []
         current_finish_time = 0.0
+        previous_finish_time = 0.0
         for task_index in range(len(core_queue)):
             if core_queue[task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME] <= current_finish_time:
+                # Tightly packed
                 current_finish_time += core_queue[task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION]
             else:
+                # Case of hole - not interested in holes that existed before arrival_time.
+                if core_queue[task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME] > arrival_time:
+                    hole_start_time = arrival_time if arrival_time >= current_finish_time else current_finish_time
+                    free_times.append((hole_start_time, core_queue[task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME]))
                 current_finish_time = core_queue[task_index][ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME] + core_queue[task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION]
-        return current_finish_time
+
+        #For the last of tasks
+        hole_start_time = arrival_time if arrival_time >= current_finish_time else current_finish_time
+        free_times.append((hole_start_time, float('inf')))
+
+        return numpy.array(free_times)
 
     # ClusterStatusKeeper class
     def get_btmap(self):
@@ -453,14 +499,14 @@ class ClusterStatusKeeper():
     # Similar to update_worker_queue() in queueing same task at multiple
     # workers (cores). This is because this is a multi-core task request.
     # The previous function is for redundancy in probe placements.
-    def update_machine_queue(self, worker_indices, increase, duration, job_id, arrival_time_at_worker, task_id, num_cores):
+    def update_machine_queue(self, worker_indices, increase, duration, job_id, arrival_time_at_worker, task_id, num_cores, best_fit_time):
         for worker in worker_indices:
             # tasks are of the form (arrival_time, task_duration, job_id, task_id, num_cores)
             tasks = self.worker_queues[worker]
             if increase:
                 # Append (arrival_time_at_worker, task_duration, job_id, task_id, num_cores) to the end of tasks list
-                tasks.append([arrival_time_at_worker, duration, job_id, task_id, num_cores])
-                #print "[", arrival_time_at_worker,"] Appending task entry", duration, job_id,task_id, num_cores," to worker_queue at worker", worker
+                tasks.append([arrival_time_at_worker, duration, job_id, task_id, num_cores, best_fit_time])
+                #print "[", arrival_time_at_worker,"] Appending task entry", duration, job_id,task_id, num_cores," to worker_queue at worker", worker, "at time ", best_fit_time
                 self.btmap.set(worker)
             else:
                 # Search for the first entry with this (jobid, task_id) and pop the task
@@ -560,7 +606,7 @@ class TaskEndEventForMachines():
             assert self.SCHEDULE_BIG_CENTRALIZED == False, "Sparrow trying to schedule in a centralized manner?"
 
         if self.SCHEDULE_BIG_CENTRALIZED == True:
-            self.status_keeper.update_machine_queue([self.worker_index], False, self.task_duration, self.job_id, current_time, self.this_task_id, self.num_cores)
+            self.status_keeper.update_machine_queue([self.worker_index], False, self.task_duration, self.job_id, current_time, self.this_task_id, self.num_cores, 0)
 
         if self.delete_task_entry:
             del Job.per_job_task_info[self.job_id][self.this_task_id]
@@ -1424,7 +1470,7 @@ class Simulation(object):
     # for different tasks.
     # TODO: Other strategies - bulk allocation using well-fit, not best fit for tasks
     # Hole filling strategies, etc
-    def find_workers_long_job_prio_murmuration(self, job_id, num_tasks, estimated_task_duration, current_time, simulation, hash_machines_considered, cpu_reqs_by_tasks, task_actual_durations):
+    def find_workers_long_job_prio_murmuration(self, job_id, num_tasks, estimated_task_duration, arrival_time, simulation, hash_machines_considered, cpu_reqs_by_tasks, task_actual_durations):
         assert num_tasks == len(cpu_reqs_by_tasks)
         if hash_machines_considered == []:
             return []
@@ -1435,7 +1481,7 @@ class Simulation(object):
         for machine_id in hash_machines_considered:
             machine = self.machines[machine_id]
             # Returns ([est_time_at_machine...], [[list of absolute core ids],[],[]])
-            est_time, cores_list = self.cluster_status_keeper.get_machine_est_wait(machine, cpu_reqs_by_tasks, current_time)
+            est_time, cores_list = self.cluster_status_keeper.get_machine_est_wait(machine, cpu_reqs_by_tasks, arrival_time, task_actual_durations)
             est_time.append(machine_id)
             est_time_list.append(est_time)
             cores_lists_for_reqs_to_machine_matrix[machine_id] = {}
@@ -1458,18 +1504,18 @@ class Simulation(object):
             chosen_machine = int(est_time_machine_array[row_index][num_tasks])
             cpu_req = cpu_reqs_by_tasks[task_index]
             cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req]
-            #print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", estimated_task_duration," current time ", current_time
+            print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", task_actual_durations[task_index]," arrival time ", arrival_time
             best_fit_for_tasks.append([chosen_machine, cores_at_chosen_machine])
 
             #Update est time at this machine and its cores
-            self.cluster_status_keeper.update_machine_queue(cores_at_chosen_machine, True, task_actual_durations[task_index], job_id, current_time, task_index, cpu_req)
+            self.cluster_status_keeper.update_machine_queue(cores_at_chosen_machine, True, task_actual_durations[task_index], job_id, arrival_time, task_index, cpu_req, best_fit_time)
 
             # Update our internal matrix est_time_machine_array for only the next task estimate for this chosen machine
             if task_index < num_tasks - 1:
                 next_task_index = task_index + 1
                 while next_task_index < num_tasks:
                     cpu_req = cpu_reqs_by_tasks[next_task_index]
-                    est_time, core_list = self.cluster_status_keeper.get_machine_est_wait(self.machines[chosen_machine], [cpu_req], current_time)
+                    est_time, core_list = self.cluster_status_keeper.get_machine_est_wait(self.machines[chosen_machine], [cpu_req], arrival_time, [task_actual_durations[next_task_index]])
                     assert len(est_time) == 1
                     assert len(core_list) == 1
                     est_time_machine_array[chosen_machine][next_task_index] = est_time[0]
