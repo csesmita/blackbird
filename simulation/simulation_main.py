@@ -360,19 +360,6 @@ class ClusterStatusKeeper():
     def get_queue_status(self):
         return self.worker_queues
 
-
-    # ClusterStatusKeeper class
-    # Sends back a list of free times - start and end times after arrival time.
-    # Last entry has an end time of infinite.
-    # [s1, e1], [s2, e2],...[sn, float('inf')]
-    # TODO - Ensure these are strictly ordered in time.
-    def get_core_queue_status(self, core_index, arrival_time):
-        assert len(self.worker_queues_free_time_end[core_index]) == len(self.worker_queues_free_time_start[core_index])
-        free_times = []
-        for hole_index in range(len(self.worker_queues_free_time_end[core_index])):
-            free_times.append((self.worker_queues_free_time_start[core_index][hole_index], self.worker_queues_free_time_end[core_index][hole_index]))
-        return numpy.array(free_times)
-
     # ClusterStatusKeeper class
     # get_machine_est_wait() -
     # Returns per task estimated wait time and list of cores that can accommodate that task at that estimated time.
@@ -382,15 +369,6 @@ class ClusterStatusKeeper():
         assert len(cpu_reqs) == len(task_durations)
         est_time_for_tasks = []
         cores_list_for_tasks = []
-        machine_queue_est = {}
-
-        # Get list of free times for all cores on this machine.
-        # [core_id,[[s1,e1], ... [sn, inf]], [core_id,[[s1,e1], ... [sn, inf]], ... ]
-        # list[core_id_index][0] = core_id
-        # list[core_id_index][1] = [[s1,e1], ... [sn, inf]] - List of holes available
-        for core in cores:
-            machine_queue_est[core.id] = self.get_core_queue_status(core.id, arrival_time)
-            #print "[t=",arrival_time,"] For core ", core," got est time = ", machine_queue_est[core]
 
         # Generate all possible holes to fit each task (D=task duration, N = num cpus needed)
         for index in range(len(cpu_reqs)):
@@ -406,30 +384,30 @@ class ClusterStatusKeeper():
             all_slots_list_cores = collections.defaultdict(set)
             inf_hole_start = {}
             for core in cores:
-                for hole in range(len(machine_queue_est[core.id])):
-                    #print "Core", core," processing hole", machine_queue_est[core][hole]
-                    assert machine_queue_est[core.id][hole][0] <= machine_queue_est[core.id][hole][1]
+                #print "[t=",arrival_time,"] For core ", core," got est time = ", self.worker_queues_free_time_start[core.id], self.worker_queues_free_time_end[core.id]
+                assert len(self.worker_queues_free_time_end[core.id]) == len(self.worker_queues_free_time_start[core.id])
+                for hole in range(len(self.worker_queues_free_time_end[core.id])):
+                    assert self.worker_queues_free_time_start[core.id][hole] < self.worker_queues_free_time_end[core.id][hole]
                     # Skip holes before arrival time
-                    if machine_queue_est[core.id][hole][1] < arrival_time:
-                        #print "Skipping since arrival time", arrival_time, "is greater than hole end time", machine_queue_est[core][hole][1]
+                    if self.worker_queues_free_time_end[core.id][hole] < arrival_time:
                         continue
-                    start = math.ceil(machine_queue_est[core.id][hole][0] if arrival_time <= machine_queue_est[core.id][hole][0] else arrival_time)
-                    if machine_queue_est[core.id][hole][1] != float('inf'):
+                    start = math.ceil(self.worker_queues_free_time_start[core.id][hole] if arrival_time <= self.worker_queues_free_time_start[core.id][hole] else arrival_time)
+                    if self.worker_queues_free_time_end[core.id][hole] != float('inf'):
                         # Find all possible holes with granularity of 1 time unit
                         time_granularity = 1
                         # Be conservative omn the end duration of the hole.
                         delta = 1 if 1 < task_duration else task_duration
-                        end = math.floor(machine_queue_est[core.id][hole][1] - task_duration + delta)
+                        end = math.floor(self.worker_queues_free_time_end[core.id][hole] - task_duration + delta)
                         arr = ((numpy.arange(start, end, time_granularity)))
-                        #print "Matched hole (", machine_queue_est[core.id][hole][0], machine_queue_est[core.id][hole][1], "with arr", arr
                         for start in arr:
                             bisect.insort(all_slots_list, start)
                             all_slots_list_cores[start].add(core.id)
                     else:
-                        start = machine_queue_est[core.id][hole][0] if arrival_time <= machine_queue_est[core.id][hole][0] else arrival_time
+                        start = self.worker_queues_free_time_start[core.id][hole] if arrival_time <= self.worker_queues_free_time_start[core.id][hole] else arrival_time
                         bisect.insort(all_slots_list, start)
                         all_slots_list_cores[start].add(core.id)
                         inf_hole_start[core.id] = start
+
             #print "Before - ", all_slots_list_cores, inf_hole_start
             for core, inf_start in inf_hole_start.items():
                 for start in all_slots_list_cores.keys():
@@ -453,9 +431,6 @@ class ClusterStatusKeeper():
 
         assert len(est_time_for_tasks) == len(cpu_reqs)
         assert len(cores_list_for_tasks) == len(cpu_reqs)
-        #if len(cpu_reqs) > 1:
-        #    machine_id = cores[0].id/ CORES_PER_MACHINE
-        #    print "For machine ", machine_id, "returning est_time_for_tasks", est_time_for_tasks, "cores list", cores_list_for_tasks
         return (est_time_for_tasks, cores_list_for_tasks)
 
     # ClusterStatusKeeper class
@@ -705,7 +680,7 @@ class Machine(object):
     # Try to process as many queued probes as possible.
     def try_process_next_probe_in_the_queue(self, current_time):
         if SYSTEM_SIMULATED == "Hawk":
-            return self.try_process_next_random_probe_single(current_time)
+            return self.try_process_next_random_probe(current_time)
 
         global stats
 
@@ -2095,7 +2070,7 @@ s.run()
 print "Simulation ended in ", (time.time() - t1), " s "
 print "Long job prio time ", time_for_long_job_prio
 print "Probe time ", time_for_send_probe_murmuration - time_for_long_job_prio
-print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine is ", utilization
+print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine Random hole fitting policy is ", utilization
 
 finished_file.close()
 load_file.close()
