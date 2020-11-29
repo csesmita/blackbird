@@ -97,10 +97,10 @@ class Job(object):
 
     #Job class
     def file_task_execution_time(self, job_args):
+        cores_needed = 1
         for i in range(self.num_tasks):
            self.unscheduled_tasks.appendleft((float(job_args[3 + i])))
            self.actual_task_duration.appendleft((float(job_args[3 + i])))
-           cores_needed = 1
            if len(job_args) > 3 + self.num_tasks:
                # For Alibaba, normalize all cpu measurements by 100. 100 = 1 core.
                # File contains actual durations of tasks followed by
@@ -384,7 +384,6 @@ class ClusterStatusKeeper():
             all_slots_list_cores = collections.defaultdict(set)
             inf_hole_start = {}
             for core in cores:
-                #print "[t=",arrival_time,"] For core ", core," got est time = ", self.worker_queues_free_time_start[core.id], self.worker_queues_free_time_end[core.id]
                 assert len(self.worker_queues_free_time_end[core.id]) == len(self.worker_queues_free_time_start[core.id])
                 for hole in range(len(self.worker_queues_free_time_end[core.id])):
                     assert self.worker_queues_free_time_start[core.id][hole] < self.worker_queues_free_time_end[core.id][hole]
@@ -400,6 +399,7 @@ class ClusterStatusKeeper():
                         end = math.floor(self.worker_queues_free_time_end[core.id][hole] - task_duration + delta)
                         arr = ((numpy.arange(start, end, time_granularity)))
                         for start in arr:
+                            #print "[t=",arrival_time,"] For core ", core.id," fitting task of duration", task_duration,"into hole = ", self.worker_queues_free_time_start[core.id][hole], self.worker_queues_free_time_end[core.id][hole], "starting at", start
                             bisect.insort(all_slots_list, start)
                             all_slots_list_cores[start].add(core.id)
                     else:
@@ -520,7 +520,7 @@ class ClusterStatusKeeper():
                 found_hole = False
                 # Order : start_hole, best_fit_start, best_fit_end, end_hole
                 # Find first start just less than or equal to best_fit_start
-                #print "Holes - for best fit (",best_fit_start, best_fit_end,") is ",
+                #print "Core", worker_index, "holes - for best fit (",best_fit_start, best_fit_end,") is "
                 for hole_index in range(len(self.worker_queues_free_time_start[worker_index])):
                     start_hole = self.worker_queues_free_time_start[worker_index][hole_index]
                     end_hole = self.worker_queues_free_time_end[worker_index][hole_index]
@@ -1505,9 +1505,8 @@ class Simulation(object):
             est_time.append(machine_id)
             est_time_list.append(est_time)
             cores_lists_for_reqs_to_machine_matrix[machine_id] = {}
-            for index in range(len(cpu_reqs_by_tasks)):
-                cpu_req = cpu_reqs_by_tasks[index]
-                cores_lists_for_reqs_to_machine_matrix[machine_id][cpu_req] = cores_list[index]
+            for task_index in range(num_tasks):
+                cores_lists_for_reqs_to_machine_matrix[machine_id][task_index] = cores_list[task_index]
 
         # Start collapsing the matrix for best fit
         # est_time_machine_array = [[est_time..., m1], [est_time, ...., m2], ... ]
@@ -1515,8 +1514,6 @@ class Simulation(object):
         #Optimization for lazy update of cpu requests.
         #Only update cores if they were selected earlier from this machine.
         machines_chosen_till_now = set()
-        #print "Best fit Cores list to machines is - "
-        #print cores_lists_for_reqs_to_machine_matrix
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
         best_fit_for_tasks = []
         for task_index in range(num_tasks):
@@ -1533,7 +1530,7 @@ class Simulation(object):
             while chosen_machine in machines_chosen_till_now:
                 est_time, core_list = self.cluster_status_keeper.get_machine_est_wait(self.machines[chosen_machine].cores, [cpu_req], arrival_time, [task_actual_durations[task_index]])
                 est_time_machine_array[chosen_machine][task_index] = est_time[0]
-                cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req] = core_list[0]
+                cores_lists_for_reqs_to_machine_matrix[chosen_machine][task_index] = core_list[0]
                 est_time_across_machines_for_this_task = est_time_machine_array[:,task_index]
                 best_fit_time = numpy.sort(est_time_across_machines_for_this_task)[0]
                 row_index = numpy.where(est_time_across_machines_for_this_task == best_fit_time)[0][0]
@@ -1543,9 +1540,9 @@ class Simulation(object):
                     break
                 chosen_machine = new_chosen_machine
 
-            cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req]
+            cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine][task_index]
             machines_chosen_till_now.add(chosen_machine)
-            #print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", task_actual_durations[task_index]," arrival time ", arrival_time
+            #print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", task_actual_durations[task_index]," arrival time ", arrival_time, "requesting", cpu_req, "cores"
             best_fit_for_tasks.append([chosen_machine, cores_at_chosen_machine])
 
             #Update est time at this machine and its cores
