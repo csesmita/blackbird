@@ -1510,6 +1510,9 @@ class Simulation(object):
         # Start collapsing the matrix for best fit
         # est_time_machine_array = [[est_time..., m1], [est_time, ...., m2], ... ]
         est_time_machine_array = numpy.array(est_time_list)
+        #Optimization for lazy update of cpu requests.
+        #Only update cores if they were selected earlier from this machine.
+        machines_chosen_till_now = set()
         #print "Best fit Cores list to machines is - "
         #print cores_lists_for_reqs_to_machine_matrix
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
@@ -1525,31 +1528,26 @@ class Simulation(object):
             row_index = numpy.where(est_time_across_machines_for_this_task == best_fit_time)[0][0]
             chosen_machine = int(est_time_machine_array[row_index][num_tasks])
             cpu_req = cpu_reqs_by_tasks[task_index]
+            while chosen_machine in machines_chosen_till_now:
+                est_time, core_list = self.cluster_status_keeper.get_machine_est_wait(self.machines[chosen_machine].cores, [cpu_req], arrival_time, [task_actual_durations[task_index]])
+                est_time_machine_array[chosen_machine][task_index] = est_time[0]
+                cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req] = core_list[0]
+                est_time_across_machines_for_this_task = est_time_machine_array[:,task_index]
+                best_fit_time = numpy.sort(est_time_across_machines_for_this_task)[0]
+                row_index = numpy.where(est_time_across_machines_for_this_task == best_fit_time)[0][0]
+                new_chosen_machine = int(est_time_machine_array[row_index][num_tasks])
+                if chosen_machine == new_chosen_machine:
+                    #Already updated this case
+                    break
+                chosen_machine = new_chosen_machine
+
             cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req]
+            machines_chosen_till_now.add(chosen_machine)
             #print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", task_actual_durations[task_index]," arrival time ", arrival_time
             best_fit_for_tasks.append([chosen_machine, cores_at_chosen_machine])
 
             #Update est time at this machine and its cores
             self.cluster_status_keeper.update_machine_queue(cores_at_chosen_machine, True, task_actual_durations[task_index], job_id, arrival_time, task_index, cpu_req, best_fit_time)
-
-            # Update our internal matrix est_time_machine_array for subsequent task estimates for this chosen machine
-            if task_index < num_tasks - 1:
-                next_task_index = task_index + 1
-                while next_task_index < num_tasks:
-                    cpu_req = cpu_reqs_by_tasks[next_task_index]
-                    est_time, core_list = self.cluster_status_keeper.get_machine_est_wait(self.machines[chosen_machine].cores, [cpu_req], arrival_time, [task_actual_durations[next_task_index]])
-                    assert len(est_time) == 1
-                    assert len(core_list) == 1
-                    #print "UPDATED est time at machine", chosen_machine," task index", next_task_index, "duration", task_actual_durations[next_task_index],"is ", est_time[0],  "on core", core_list[0]
-                    est_time_machine_array[chosen_machine][next_task_index] = est_time[0]
-                    cores_lists_for_reqs_to_machine_matrix[chosen_machine][cpu_req] = core_list[0]
-                    next_task_index += 1
-            #print"UPDATED - Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] est time machine array",est_time_machine_array[chosen_machine], "cores_lists_for_reqs_to_machine_matrix[chosen_machine]", cores_lists_for_reqs_to_machine_matrix[chosen_machine]
-            #print"------- UPDATED - Printing est_time_machine_array for chosen machine", chosen_machine," for all tasks of job_id ", job_id,"--------"
-            est_time_across_machines_for_this_task = est_time_machine_array[chosen_machine,:]
-            #print est_time_across_machines_for_this_task
-            #print"------- UPDATED - Printing cores list for chosen machine", chosen_machine,"for all tasks of job_id", job_id,"-----------"
-            #print cores_lists_for_reqs_to_machine_matrix[chosen_machine]
 
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
         return best_fit_for_tasks
