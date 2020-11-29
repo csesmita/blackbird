@@ -479,6 +479,8 @@ class ClusterStatusKeeper():
     # Similar to update_worker_queue() in queueing same task at multiple
     # workers (cores). This is because this is a multi-core task request.
     # The previous function is for redundancy in probe placements.
+    # TODO/Note - This function assumes no update is required after task is completed.
+    # This is because hole fitting is based on actual task durations.
     def update_machine_queue(self, worker_indices, increase, duration, job_id, arrival_time_at_worker, task_id, num_cores, best_fit_time):
         for worker in worker_indices:
             # tasks are of the form (arrival_time, task_duration, job_id, task_id, num_cores)
