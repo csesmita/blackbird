@@ -177,7 +177,8 @@ class JobArrival(Event, file):
             # TODO - Follow the pattern of rest of the schedulers and 
             # have the worker selection logic here.
             worker_indices.append(random.choice(self.simulation.scheduler_indices))
-            #print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
+            if self.job.id % 100 == 0:
+                print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
         elif not long_job:
             # Short job schedulers
             print current_time, ": Short Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
@@ -662,7 +663,6 @@ class Machine(object):
         core.executing_big              = False
         core.queued_big                 = core.queued_big -1
         core.tstamp_start_crt_big_task  = current_time
-
         return self.try_process_next_probe_in_the_queue(current_time)
 
     #Machine class
@@ -705,6 +705,7 @@ class Machine(object):
 
             # Take the larger of the probe arrival time and core free time to determine when the task starts executing.
             processing_start_time = core_available_time if core_available_time > probe_arrival_time else probe_arrival_time
+            assert current_time == processing_start_time
 
             # Finally, process the current task with all these parameters
             task_status, new_events = self.simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, processing_start_time, probe_arrival_time)
@@ -749,18 +750,17 @@ class Machine(object):
                 continue
 
             core_indices = self.free_cores.keys()[0 :task_cpu_request]
-            core_available_time = 0
             for core_id in core_indices:
-                time = self.free_cores[core_id]
-                if core_available_time < time:
-                    core_available_time = time
                 del self.free_cores[core_id]
 
-            # Take the larger of the probe arrival time and core free time to determine when the task starts executing.
-            processing_start_time = core_available_time if core_available_time > probe_arrival_time else probe_arrival_time
+            # Note - Current time is the start of the processing time. This is because -
+            # 1. The probe has already arrived before now.
+            # 2. The cores have been freed before now.
+            # 3. There might have been redundant probes because of which this task was
+            #    still enqueued till now despite cores available.
 
             # Finally, process the current task with all these parameters
-            task_status, new_events = self.simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, processing_start_time, probe_arrival_time)
+            task_status, new_events = self.simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, current_time, probe_arrival_time)
             for new_event in new_events:
                 events.append((new_event[0], new_event[1]))
             self.queued_probes.pop(pos)
@@ -796,29 +796,27 @@ class Machine(object):
                 continue
 
             if len(self.free_cores.keys()) < task_cpu_request:
-                # Required core indices for this task not yet available.
+                # Required number of cores for this task not yet available.
                 break
 
             core_indices = self.free_cores.keys()[0 :task_cpu_request]
-            core_available_time = 0
             for core_id in core_indices:
-                time = self.free_cores[core_id]
-                if core_available_time < time:
-                    core_available_time = time
                 del self.free_cores[core_id]
 
-            # Take the larger of the probe arrival time and core free time to determine when the task starts executing.
-            processing_start_time = core_available_time if core_available_time > probe_arrival_time else probe_arrival_time
+            # Note - Current time is the start of the processing time. This is because -
+            # 1. The probe has already arrived before now.
+            # 2. The cores have been freed before now.
+            # 3. There might have been redundant probes because of which this task was
+            #    still enqueued till now despite cores available.
 
             # Finally, process the current task with all these parameters
-            task_status, new_events = self.simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, processing_start_time, probe_arrival_time)
+            task_status, new_events = self.simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, current_time, probe_arrival_time)
             for new_event in new_events:
                 events.append((new_event[0], new_event[1]))
             self.queued_probes.pop(pos)
             break
 
         return events
-
 
 
 #####################################################################################################################
@@ -1856,7 +1854,7 @@ class Simulation(object):
         if SYSTEM_SIMULATED == "Hawk":
             #Account for time for the probe to get task data and details.
             task_completion_time += 2 * NETWORK_DELAY
-        #print current_time, " machine:", machine.id, core_indices, " task from job ", job_id, " task index: ", task_index," task duration: ", task_duration, " will finish at time ", task_completion_time
+        #print current_time, " machine:", machine.id, core_indices, " task from job ", job_id, " task index: ", task_index," task duration: ", task_duration, " arrived at ", probe_arrival_time, "and will finish at time ", task_completion_time
 
         is_job_complete = job.update_task_completion_details(task_completion_time)
 
