@@ -1621,11 +1621,10 @@ class Simulation(object):
         assert probe_ratio * job.num_tasks == len(machine_indices)
         for index in range(len(machine_indices)):
             machine_id = machine_indices[index]
-            for probe_index in range(probe_ratio):
-                task_index = index / probe_ratio
-                # The exact cores are a matter of availability at the machine.
-                task_arrival_events.append((current_time + NETWORK_DELAY,
-                     ProbeEventForMachines(self.machines[machine_id], [], job.id, task_index, job.cpu_reqs_by_tasks[task_index], job.actual_task_duration[task_index], job.estimated_task_duration, job.job_type_for_scheduling)))
+            task_index = index / probe_ratio
+            # The exact cores are a matter of availability at the machine.
+            task_arrival_events.append((current_time + NETWORK_DELAY,
+                 ProbeEventForMachines(self.machines[machine_id], [], job.id, task_index, job.cpu_reqs_by_tasks[task_index], job.actual_task_duration[task_index], job.estimated_task_duration, job.job_type_for_scheduling)))
         return task_arrival_events
 
     #Simulation class
