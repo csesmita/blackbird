@@ -17,7 +17,6 @@ import copy
 import collections
 import os
 import numpy
-import bisect
 
 class TaskDurationDistributions:
     CONSTANT, MEAN, FROM_FILE  = range(3)
@@ -31,20 +30,11 @@ class Job(object):
     per_job_task_info = {}
 
     def __init__(self, task_distribution, line, estimate_distribution, off_mean_bottom, off_mean_top):
-        global job_start_tstamps
-
         job_args                    = (line.split('\n'))[0].split()
         self.start_time             = float(job_args[0])
         self.num_tasks              = int(job_args[1])
         mean_task_duration          = float(job_args[2])
 
-        #dephase the incoming job in case it has the exact submission time as another already submitted job
-        if self.start_time not in job_start_tstamps:
-            job_start_tstamps[self.start_time] = self.start_time
-        else:
-            job_start_tstamps[self.start_time] += 0.01
-            self.start_time = job_start_tstamps[self.start_time]
-        
         self.id = Job.job_count
         Job.job_count += 1
         self.completed_tasks_count = 0
@@ -112,7 +102,7 @@ class Job(object):
                # HACK! Instead of changing traces file, make this value multi core instead
                self.cpu_reqs_by_tasks.appendleft(cores_needed)
                cores_needed += 1
-               if cores_needed == CORES_PER_MACHINE:
+               if cores_needed >= CORES_PER_MACHINE:
                    cores_needed = 1
         assert(len(self.unscheduled_tasks) == self.num_tasks)
 
@@ -369,6 +359,8 @@ class ClusterStatusKeeper():
         assert len(cpu_reqs) == len(task_durations)
         est_time_for_tasks = []
         cores_list_for_tasks = []
+        numpy_arange = numpy.arange
+        num_cores = len(cores)
 
         # Generate all possible holes to fit each task (D=task duration, N = num cpus needed)
         for index in range(len(cpu_reqs)):
@@ -376,37 +368,43 @@ class ClusterStatusKeeper():
             task_duration = task_durations[index]
             # Number of cores requested has to be atleast equal to the number of cores on the machine
             # Filter out machines that have less than requested number of cores
-            if len(cores) < cpu_req:
+            if num_cores < cpu_req:
                 est_time_for_tasks.append(float('inf'))
                 cores_list_for_tasks.append([])
                 continue
-            all_slots_list = []
+            all_slots_list = set()
+            all_slots_list_add = all_slots_list.add
             all_slots_list_cores = collections.defaultdict(set)
             inf_hole_start = {}
             for core in cores:
-                assert len(self.worker_queues_free_time_end[core.id]) == len(self.worker_queues_free_time_start[core.id])
-                for hole in range(len(self.worker_queues_free_time_end[core.id])):
-                    assert self.worker_queues_free_time_start[core.id][hole] < self.worker_queues_free_time_end[core.id][hole]
+                core_id = core.id
+                time_start = self.worker_queues_free_time_start[core_id]
+                time_end = self.worker_queues_free_time_end[core_id]
+                assert len(time_end) == len(time_start)
+                for hole in range(len(time_end)):
+                    assert time_start[hole] < time_end[hole]
                     # Skip holes before arrival time
-                    if self.worker_queues_free_time_end[core.id][hole] < arrival_time:
+                    if time_end[hole] < arrival_time:
                         continue
-                    start = math.ceil(self.worker_queues_free_time_start[core.id][hole] if arrival_time <= self.worker_queues_free_time_start[core.id][hole] else arrival_time)
-                    if self.worker_queues_free_time_end[core.id][hole] != float('inf'):
+                    start = math.ceil(time_start[hole] if arrival_time <= time_start[hole] else arrival_time)
+                    if time_end[hole] != float('inf'):
                         # Find all possible holes with granularity of 1 time unit
                         time_granularity = 1
                         # Be conservative omn the end duration of the hole.
                         delta = 1 if 1 < task_duration else task_duration
-                        end = math.floor(self.worker_queues_free_time_end[core.id][hole] - task_duration + delta)
-                        arr = ((numpy.arange(start, end, time_granularity)))
+                        end = math.floor(time_end[hole] - task_duration + delta)
+                        #TODO - Convert all holes to ints instead of floats. Easier to manage.
+                        #TODO - Try the same with range() function. Might be faster.
+                        arr = ((numpy_arange(start, end, time_granularity)))
                         for start in arr:
-                            #print "[t=",arrival_time,"] For core ", core.id," fitting task of duration", task_duration,"into hole = ", self.worker_queues_free_time_start[core.id][hole], self.worker_queues_free_time_end[core.id][hole], "starting at", start
-                            bisect.insort(all_slots_list, start)
-                            all_slots_list_cores[start].add(core.id)
+                            #print "[t=",arrival_time,"] For core ", core_id," fitting task of duration", task_duration,"into hole = ", time_start[hole], time_end[hole], "starting at", start
+                            all_slots_list_add(start)
+                            all_slots_list_cores[start].add(core_id)
                     else:
-                        start = self.worker_queues_free_time_start[core.id][hole] if arrival_time <= self.worker_queues_free_time_start[core.id][hole] else arrival_time
-                        bisect.insort(all_slots_list, start)
-                        all_slots_list_cores[start].add(core.id)
-                        inf_hole_start[core.id] = start
+                        start = time_start[hole] if arrival_time <= time_start[hole] else arrival_time
+                        all_slots_list_add(start)
+                        all_slots_list_cores[start].add(core_id)
+                        inf_hole_start[core_id] = start
 
             #print "Before - ", all_slots_list_cores, inf_hole_start
             for core, inf_start in inf_hole_start.items():
@@ -417,8 +415,7 @@ class ClusterStatusKeeper():
 
             #Arrange in smallest overlapping holes
             #TODO - Look for cores with least fragmentation instead of random selection
-            start_times = sorted(set(all_slots_list))
-            #print all_slots_list_cores
+            start_times = sorted(all_slots_list)
             for start_time in start_times:
                 if len(all_slots_list_cores[start_time]) >= cpu_req:
                     cores_list = random.sample(all_slots_list_cores[start_time], cpu_req)
@@ -508,8 +505,7 @@ class ClusterStatusKeeper():
                         break
                     task_index += 1
                 assert task_index < original_task_queue_length, (" %r %r - offending value for task_duration: %r %i %i %i %i" % (task_index, original_task_queue_length, duration,job_id,task_id, num_cores, worker))
-
-		# Add this busy time from core free times.
+        # Subtract this busy time from core free times.
         if increase:
             self.update_worker_queues_free_time(worker_indices, best_fit_time, best_fit_time + duration)
 
@@ -531,14 +527,15 @@ class ClusterStatusKeeper():
                         self.worker_queues_free_time_start[worker_index].pop(hole_index)
                         self.worker_queues_free_time_end[worker_index].pop(hole_index)
                         if start_hole == best_fit_start and end_hole == best_fit_end:
-                            # Perfect hole matching. Nothing to do.
                             break
+                        insert_position = hole_index
                         if start_hole < best_fit_start:
-                            bisect.insort(self.worker_queues_free_time_start[worker_index], start_hole)
-                            bisect.insort(self.worker_queues_free_time_end[worker_index], best_fit_start)
+                            self.worker_queues_free_time_start[worker_index].insert(insert_position, start_hole)
+                            self.worker_queues_free_time_end[worker_index].insert(insert_position, best_fit_start)
+                            insert_position += 1
                         if end_hole > best_fit_end:
-                            bisect.insort(self.worker_queues_free_time_start[worker_index], best_fit_end)
-                            bisect.insort(self.worker_queues_free_time_end[worker_index], end_hole)
+                            self.worker_queues_free_time_start[worker_index].insert(insert_position, best_fit_end)
+                            self.worker_queues_free_time_end[worker_index].insert(insert_position, end_hole)
                         #print "Updated holes at worker", worker_index," is ", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index]
                         break
 
@@ -587,21 +584,11 @@ class TaskEndEvent():
     def run(self, current_time):
         assert SYSTEM_SIMULATED != "Murmuration", "TaskEndEvent should not be called for Murmuration"
         assert SYSTEM_SIMULATED != "Hawk", "TaskEndEvent should not be called for Hawk"
-        global stats
-        stats.STATS_TASKS_TOTAL_FINISHED += 1
-        if(self.job_type_for_scheduling != BIG):
-            stats.STATS_TASKS_SHORT_FINISHED += 1
-            if(self.worker.in_big):
-                stats.STATS_TASKS_SH_EXEC_IN_BP += 1
 
-        elif (self.SCHEDULE_BIG_CENTRALIZED):
+        if (self.job_type_for_scheduling != BIG and self.SCHEDULE_BIG_CENTRALIZED):
             self.status_keeper.update_workers_queue([self.worker.id], False, self.estimated_task_duration, self.job_id, current_time)
 
-        if(self.job_type_for_scheduling == BIG):
-            stats.STATS_TASKS_LONG_FINISHED += 1
-
         del Job.per_job_task_info[self.job_id][self.this_task_id]
-            
 
         self.worker.tstamp_start_crt_big_task =- 1
         return self.worker.free_slot(current_time)
@@ -682,9 +669,7 @@ class Machine(object):
     # Try to process as many queued probes as possible.
     def try_process_next_probe_in_the_queue(self, current_time):
         if SYSTEM_SIMULATED == "Hawk":
-            return self.try_process_next_random_probe(current_time)
-
-        global stats
+            return self.try_process_next_random_probe_single(current_time)
 
         events = []
         pos = 0
@@ -733,8 +718,6 @@ class Machine(object):
     #Machine class
     # Try to process as many queued probes as possible.
     def try_process_next_random_probe(self, current_time):
-        global stats
-
         events = []
         pos = 0
         while True:
@@ -787,8 +770,6 @@ class Machine(object):
     #Machine class
     # Try to process as many queued probes as possible.
     def try_process_next_random_probe_single(self, current_time):
-        global stats
-
         events = []
         pos = 0
         while True:
@@ -890,14 +871,7 @@ class Worker(object):
             assert False, "Murmuration should not invoke ProbeEventForWorkers or worker.add_probe()"
         if SYSTEM_SIMULATED == "Hawk":
             assert False, "Hawk should not invoke ProbeEventForWorkers or worker.add_probe()"
-        global stats
         long_job = job_type_for_scheduling == BIG
-        if (not long_job and handle_stealing == False and (self.executing_big == True or self.queued_big > 0)):
-            stats.STATS_SH_PROBES_QUEUED_BEHIND_BIG += 1        
-    
-        if (not long_job and handle_stealing == False and  self.in_big):        
-            stats.STATS_SH_PROBES_ASSIGNED_IN_BP +=1
-
         self.queued_probes.append([job_id,task_length,(self.executing_big == True or self.queued_big > 0), 0, False,-1, current_time])
 
         # Now, tasks are ready to maybe start
@@ -935,8 +909,6 @@ class Worker(object):
 
     #Worker class
     def ask_probes(self, current_time):
-        global stats
-
         new_events  =  []
         new_probes  =  []
         ctr_it      =  0
@@ -949,20 +921,8 @@ class Worker(object):
         if(from_worker!=-1 and len(new_probes)!= 0):
             print current_time, ": Worker ", self.id," Stealing: ", len(new_probes), " from: ",from_worker, " attempts: ",ctr_it
             from_worker_obj=self.simulation.workers[from_worker]
-            if(from_worker_obj.in_big and self.in_big):
-                stats.STATS_TOTAL_STOLEN_B_FROM_B_PROBES          += len(new_probes)
-            if(from_worker_obj.in_big and not self.in_big):
-                stats.STATS_TOTAL_STOLEN_S_FROM_B_PROBES          += len(new_probes)
-            if(not from_worker_obj.in_big and not self.in_big):
-                stats.STATS_TOTAL_STOLEN_S_FROM_S_PROBES          += len(new_probes)
-                 
-
-            stats.STATS_STEALING_MESSAGES           += ctr_it
-            stats.STATS_TOTAL_STOLEN_PROBES          += len(new_probes)
-            stats.STATS_SUCCESSFUL_STEAL_ATTEMPTS   += 1
         else:
             print current_time, ": Worker ", self.id," failed to steal. attempts: ",ctr_it
-            stats.STATS_STEALING_MESSAGES += ctr_it
 
         for job_id, task_length, behind_big, cum, sticky, handle_steal, probe_time in new_probes:
             assert (self.simulation.jobs[job_id].job_type_for_comparison != BIG)
@@ -1045,7 +1005,6 @@ class Worker(object):
             assert False, "Murmuration shouldn't be invoking worker.process_next_probe_in_the_queue()"
         if SYSTEM_SIMULATED == "Hawk":
             assert False, "Hawk shouldn't be invoking worker.process_next_probe_in_the_queue()"
-        global stats
         self.free_slots.pop(0)
         self.simulation.decrease_free_slots_for_load_tracking(self)
         
@@ -1085,23 +1044,12 @@ class Worker(object):
             task_status, events = self.simulation.get_task(job_id, self, current_time, probe_arrival_time)
 
         job_bydef_big = (self.simulation.jobs[job_id].job_type_for_comparison == BIG)
-       
-        if(not job_bydef_big and self.queued_probes[0][5] == 1 and self.in_big and was_successful and task_status):
-            stats.STATS_BYPASSEDBYBIG_AND_STUCK+=1 
 
         if(not job_bydef_big and self.queued_probes[0][2] == True and self.in_big and was_successful and task_status):
-               stats.STATS_SHORT_TASKS_WAITED_FOR_BIG += 1
-               self.simulation.jobs_affected_by_holb[job_id]=1
-                   
- 
-        if(not job_bydef_big and not was_successful and self.in_big):
-                stats.STATS_SHORT_UNSUCC_PROBES_IN_BIG +=1
+            self.simulation.jobs_affected_by_holb[job_id]=1
+
 
         if(SBP_ENABLED==True and was_successful and task_status and not job_bydef_big):
-            if(self.queued_probes[pos][4]):
-            	stats.STATS_STICKY_EXECUTIONS += 1
-                if(self.in_big):
-                    stats.STATS_STICKY_EXECUTIONS_IN_BP +=1
             self.queued_probes[pos][4] = True
 
         if(SBP_ENABLED==False or not was_successful or job_bydef_big):
@@ -1388,7 +1336,6 @@ class Simulation(object):
 
     #Simulation class
     def find_machines_random(self, probe_ratio, nr_tasks, possible_machine_indices, min_probes, cores_requested):
-        #print "Number of workers for short job", len(possible_worker_indices), "and num tasks", nr_tasks
         if possible_machine_indices == []:
             return []
         assert len(cores_requested) == nr_tasks
@@ -1396,6 +1343,7 @@ class Simulation(object):
         nr_probes = max(probe_ratio*nr_tasks,min_probes)
         # Recalculate probe_ratio incase min_probes are chosen.
         probe_ratio = nr_probes / nr_tasks
+        #print "Number of machines for Sparrow job", len(possible_machine_indices), "and num tasks", nr_tasks, "probe ratio", probe_ratio
         task_index = 0
         for task_index in range(0, nr_tasks):
             nr_cores_requested = cores_requested[task_index]
@@ -1492,6 +1440,8 @@ class Simulation(object):
     # Hole filling strategies, etc
     def find_workers_long_job_prio_murmuration(self, job_id, num_tasks, estimated_task_duration, arrival_time, simulation, hash_machines_considered, cpu_reqs_by_tasks, task_actual_durations):
         assert num_tasks == len(cpu_reqs_by_tasks)
+        global running_time_get_machine_est_time
+        global running_time_get_machine_est_time_bulk
         if hash_machines_considered == []:
             return []
         cores_lists_for_reqs_to_machine_matrix = {}
@@ -1501,7 +1451,11 @@ class Simulation(object):
         for machine_id in hash_machines_considered:
             machine = self.machines[machine_id]
             # Returns ([est_time_at_machine...], [[list of absolute core ids],[],[]])
+            start = time.time()
             est_time, cores_list = self.cluster_status_keeper.get_machine_est_wait(machine.cores, cpu_reqs_by_tasks, arrival_time, task_actual_durations)
+            end = time.time()
+            running_time_get_machine_est_time += end - start
+            running_time_get_machine_est_time_bulk += end - start
             est_time.append(machine_id)
             est_time_list.append(est_time)
             cores_lists_for_reqs_to_machine_matrix[machine_id] = {}
@@ -1520,7 +1474,6 @@ class Simulation(object):
             # est_time_across_machines_for_this_task = [t1 t2 t3,... tM] for this task across machines
             #print"------- Printing est_time_machine_array for job_id ", job_id, task_index, "--------"
             est_time_across_machines_for_this_task = est_time_machine_array[:,task_index]
-            #print est_time_across_machines_for_this_task
             best_fit_time = numpy.sort(est_time_across_machines_for_this_task)[0]
 
             #Fetch the machine with the best fit time for this task
@@ -1528,11 +1481,14 @@ class Simulation(object):
             chosen_machine = int(est_time_machine_array[row_index][num_tasks])
             cpu_req = cpu_reqs_by_tasks[task_index]
             while chosen_machine in machines_chosen_till_now:
+                start = time.time()
                 est_time, core_list = self.cluster_status_keeper.get_machine_est_wait(self.machines[chosen_machine].cores, [cpu_req], arrival_time, [task_actual_durations[task_index]])
+                running_time_get_machine_est_time += time.time() - start
                 est_time_machine_array[chosen_machine][task_index] = est_time[0]
                 cores_lists_for_reqs_to_machine_matrix[chosen_machine][task_index] = core_list[0]
                 est_time_across_machines_for_this_task = est_time_machine_array[:,task_index]
                 best_fit_time = numpy.sort(est_time_across_machines_for_this_task)[0]
+                assert best_fit_time < float('inf')
                 row_index = numpy.where(est_time_across_machines_for_this_task == best_fit_time)[0][0]
                 new_chosen_machine = int(est_time_machine_array[row_index][num_tasks])
                 if chosen_machine == new_chosen_machine:
@@ -1683,7 +1639,6 @@ class Simulation(object):
 
     #Simulation class
     def send_probes_eagle(self, job, current_time, worker_indices, btmap):
-        global stats
         self.jobs[job.id] = job
         probe_events = []
 
@@ -1711,15 +1666,9 @@ class Simulation(object):
              #small
             #worker_indices = self.find_workers_random(PROBE_RATIO,job.num_tasks,self.big_partition_workers,MIN_NR_PROBES)
 
- 
-            stats.STATS_ROUNDS_ATTEMPTS +=1
             for i in range(0,ROUNDS_SCHEDULING):
                 ok_nr, ok_nodes = self.try_round_of_probing(current_time,job,worker_indices,probe_events,i+1)  
-                if(i==0):
-                    stats.STATS_PERC_1ST_ROUNDS+=ok_nr*1.0/missing_probes
                 missing_probes -= ok_nr
-                stats.STATS_ROUNDS +=1
-                
 
                 if(missing_probes == 0):
                     return probe_events
@@ -1732,12 +1681,10 @@ class Simulation(object):
                 #if(len(list_non_long_job_workers)==0):
                  #   break
                 worker_indices = self.find_workers_random(1, missing_probes, list_non_long_job_workers,0)
-                stats.STATS_REASSIGNED_PROBES += missing_probes
 
             if(missing_probes > 0):
                 worker_indices = self.find_workers_random(1, missing_probes, self.small_not_big_partition_workers,0)
                 self.try_round_of_probing(current_time,job,worker_indices,probe_events,ROUNDS_SCHEDULING+1)  
-                stats.STATS_FALLBACKS_TO_SP +=1
         
         return probe_events
 
@@ -1789,8 +1736,6 @@ class Simulation(object):
     # Simulation class
     # Contains optimization to sort workers just once
     def send_probes_murmuration(self, job, current_time, worker_indices, btmap):
-        global stats
-        global time_for_send_probe_murmuration
         global time_for_long_job_prio
         self.jobs[job.id] = job
         task_arrival_events = []
@@ -1827,7 +1772,6 @@ class Simulation(object):
                 task_arrival_events.append((current_time + NETWORK_DELAY,
                      ProbeEventForMachines(self.machines[machine_id], core_ids, job.id, index, job.cpu_reqs_by_tasks[index], job.actual_task_duration[index], job.estimated_task_duration, job.job_type_for_scheduling)))
 
-            time_for_send_probe_murmuration += time.time() - probe_start_time
             # Return task arrival events for long jobs
             return task_arrival_events
 
@@ -2006,8 +1950,6 @@ class Simulation(object):
 #globals
 
 finished_file   = open('finished_file', 'w')
-load_file       = open('load_file', 'w')
-stats_file      = open('stats_file', 'w')
 
 NETWORK_DELAY = 0.0005
 BIG = 1
@@ -2022,7 +1964,8 @@ if(len(sys.argv) != 26):
 
 utilization = 0
 time_for_long_job_prio = 0
-time_for_send_probe_murmuration = 0
+running_time_get_machine_est_time = 0
+running_time_get_machine_est_time_bulk = 0
 
 WORKLOAD_FILE                   = sys.argv[1]
 stealing                        = (sys.argv[2] == "yes")
@@ -2059,52 +2002,17 @@ CAP_SRPT_SBP = 5 #cap on the % of slowdown a job can tolerate for SRPT and SBP
 
 t1 = time.time()
 
-stats = Stats()
 s = Simulation(MONITOR_INTERVAL, stealing, SCHEDULE_BIG_CENTRALIZED, WORKLOAD_FILE,CUTOFF_THIS_EXP,CUTOFF_BIG_SMALL,ESTIMATION,OFF_MEAN_BOTTOM,OFF_MEAN_TOP,TOTAL_MACHINES)
 s.run()
 
 print "Simulation ended in ", (time.time() - t1), " s "
 print "Long job prio time ", time_for_long_job_prio
-print "Probe time ", time_for_send_probe_murmuration - time_for_long_job_prio
+print "Of which running time for get_machine_est_time is", running_time_get_machine_est_time
+print "Of which BULK running time for get_machine_est_time is", running_time_get_machine_est_time_bulk
 print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine Random hole fitting policy is ", utilization
 
 finished_file.close()
-load_file.close()
 
 # Generate CDF data
 os.system("python process.py finished_file "+ SYSTEM_SIMULATED + " " + "long" + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES))
 
-print >> stats_file, "STATS_SH_PROBES_ASSIGNED_IN_BP:      ",    stats.STATS_SH_PROBES_ASSIGNED_IN_BP
-print >> stats_file, "STATS_SH_PROBES_QUEUED_BEHIND_BIG:      ",    stats.STATS_SH_PROBES_QUEUED_BEHIND_BIG 
-print >> stats_file, "STATS_TASKS_SH_EXEC_IN_BP:             ",     stats.STATS_TASKS_SH_EXEC_IN_BP
-print >> stats_file, "STATS_SHORT_TASKS_WAITED_FOR_BIG:         ",           stats.STATS_SHORT_TASKS_WAITED_FOR_BIG
-print >> stats_file, "STATS_SHORT_JOBS_HAVING_TASKS_THAT_WAITED_FOR_BIG:         ",           len(s.jobs_affected_by_holb)
-print >> stats_file, "                                 "
-print >> stats_file, "STATS_TOTAL_STOLEN_PROBES:        ",           stats.STATS_TOTAL_STOLEN_PROBES 
-print >> stats_file, "STATS_TOTAL_STOLEN_B_FROM_B_PROBES:        ",           stats.STATS_TOTAL_STOLEN_B_FROM_B_PROBES 
-print >> stats_file, "STATS_TOTAL_STOLEN_S_FROM_S_PROBES:        ",           stats.STATS_TOTAL_STOLEN_S_FROM_S_PROBES 
-print >> stats_file, "STATS_TOTAL_STOLEN_S_FROM_B_PROBES:        ",           stats.STATS_TOTAL_STOLEN_S_FROM_B_PROBES 
-print >> stats_file, "STATS_SHORT_UNSUCC_PROBES_IN_BIG:        ",           stats.STATS_SHORT_UNSUCC_PROBES_IN_BIG 
-    
-print >> stats_file, "STATS_SUCCESSFUL_STEAL_ATTEMPTS: ",           stats.STATS_SUCCESSFUL_STEAL_ATTEMPTS
-print >> stats_file, "STATS_STEALING_MESSAGES:         ",           stats.STATS_STEALING_MESSAGES
-print >> stats_file, "                                 "
-print >> stats_file, "STATS_STICKY_EXECUTIONS:             ",           stats.STATS_STICKY_EXECUTIONS
-print >> stats_file, "STATS_STICKY_EXECUTIONS_IN_BP:             ",           stats.STATS_STICKY_EXECUTIONS_IN_BP
-print >> stats_file, "STATS_REASSIGNED_PROBES:             ",           stats.STATS_REASSIGNED_PROBES
-print >> stats_file, "STATS_BYPASSEDBYBIG_AND_STUCK:             ",           stats.STATS_BYPASSEDBYBIG_AND_STUCK
-print >> stats_file, "STATS_FALLBACKS_TO_SP:             ",           stats.STATS_FALLBACKS_TO_SP
-print >> stats_file, "STATS_RND_FIRST_ROUND_NO_LOCAL_BITMAP:             ",           stats.STATS_RND_FIRST_ROUND_NO_LOCAL_BITMAP
-if(stats.STATS_ROUNDS_ATTEMPTS!=0):
-    print >> stats_file, "STATS_ROUNDS/STATS_ROUNDS_ATTEMPTS:             ",           stats.STATS_ROUNDS*1.0/stats.STATS_ROUNDS_ATTEMPTS
-    print >> stats_file, "STATS_PERC_1ST_ROUNDS/STATS_ROUNDS_ATTEMPTS:    ",           stats.STATS_PERC_1ST_ROUNDS*1.0/stats.STATS_ROUNDS_ATTEMPTS
-print >> stats_file, "                                 "
-print >> stats_file, "STATS_TASKS_TOTAL_FINISHED:             ",          stats.STATS_TASKS_TOTAL_FINISHED
-print >> stats_file, "STATS_TASKS_SHORT_FINISHED:             ",          stats.STATS_TASKS_SHORT_FINISHED
-print >> stats_file, "STATS_TASKS_LONG_FINISHED:             ",          stats.STATS_TASKS_LONG_FINISHED
-print >> stats_file, "STATS_JOBS_FINISHED:             ",          s.jobs_scheduled
-
-if(SYSTEM_SIMULATED=="Eagle"):
-    print >> stats_file, "%TASKS AFFECTED BY HOLB ",stats.STATS_SHORT_TASKS_WAITED_FOR_BIG*1.0/stats.STATS_TASKS_SHORT_FINISHED," %JOBS ",len(s.jobs_affected_by_holb)*1.0/s.jobs_scheduled
-
-stats_file.close()
