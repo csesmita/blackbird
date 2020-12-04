@@ -162,6 +162,7 @@ class JobArrival(Event, file):
         self.jobs_file = jobs_file
 
     def run(self, current_time):
+        global t1
         new_events = []
 
         long_job = self.job.job_type_for_scheduling == BIG
@@ -178,7 +179,7 @@ class JobArrival(Event, file):
             # have the worker selection logic here.
             worker_indices.append(random.choice(self.simulation.scheduler_indices))
             if self.job.id % 100 == 0:
-                print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
+                print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration, "simulation time", time.time() - t1
         elif not long_job:
             # Short job schedulers
             print current_time, ": Short Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
@@ -356,18 +357,20 @@ class ClusterStatusKeeper():
     # Returns per task estimated wait time and list of cores that can accommodate that task at that estimated time.
     # Returns - ([est_task1, est_task2, ...],[[list of cores],[list of core], [],...])
     # Might return smaller values for smaller cpu req, even if those requests come in later.
+    # Also, converts holes to ints except the last entry in end which is float('inf')
     def get_machine_est_wait(self, cores, cpu_reqs, arrival_time, task_durations):
         if len(cpu_reqs) != len(task_durations):
             raise AssertionError('Error in parameters to get_machine_est_wait - mismatch in lengths of cpu requests and task duration arrays')
         est_time_for_tasks = []
         cores_list_for_tasks = []
-        numpy_arange = numpy.arange
         num_cores = len(cores)
 
         # Generate all possible holes to fit each task (D=task duration, N = num cpus needed)
+        arrival_time = int(math.ceil(arrival_time))
         for index in xrange(len(cpu_reqs)):
             cpu_req = cpu_reqs[index]
-            task_duration = task_durations[index]
+            #Fit into smallest integral duration hole
+            task_duration = int(math.ceil(task_durations[index]))
             # Number of cores requested has to be atleast equal to the number of cores on the machine
             # Filter out machines that have less than requested number of cores
             if num_cores < cpu_req:
@@ -390,22 +393,19 @@ class ClusterStatusKeeper():
                     # Skip holes before arrival time
                     if time_end[hole] < arrival_time:
                         continue
-                    start = math.ceil(time_start[hole] if arrival_time <= time_start[hole] else arrival_time)
+                    start = time_start[hole] if arrival_time <= time_start[hole] else arrival_time
                     if time_end[hole] != float('inf'):
                         # Find all possible holes with granularity of 1 time unit
                         time_granularity = 1
-                        # Be conservative omn the end duration of the hole.
+                        # Be conservative on the end duration of the hole.
                         delta = 1 if 1 < task_duration else task_duration
-                        end = math.floor(time_end[hole] - task_duration + delta)
-                        #TODO - Convert all holes to ints instead of floats. Easier to manage.
-                        #TODO - Try the same with range() function. Might be faster.
-                        arr = ((numpy_arange(start, end, time_granularity)))
+                        end = time_end[hole] - task_duration + delta
+                        arr = range(start, end, time_granularity)
                         for start in arr:
                             #print "[t=",arrival_time,"] For core ", core_id," fitting task of duration", task_duration,"into hole = ", time_start[hole], time_end[hole], "starting at", start
                             all_slots_list_add(start)
                             all_slots_list_cores[start].add(core_id)
                     else:
-                        start = time_start[hole] if arrival_time <= time_start[hole] else arrival_time
                         all_slots_list_add(start)
                         all_slots_list_cores[start].add(core_id)
                         inf_hole_start[core_id] = start
@@ -483,6 +483,8 @@ class ClusterStatusKeeper():
     # TODO/Note - This function assumes no update is required after task is completed.
     # This is because hole fitting is based on actual task durations.
     def update_machine_queue(self, worker_indices, increase, duration, job_id, current_time, task_id, num_cores, best_fit_time):
+        if type(best_fit_time) is not int:
+            raise AssertionError('inserting best fit start that is not int!')
         for worker in worker_indices:
             # tasks are of the form (arrival_time, task_duration, job_id, task_id, num_cores)
             tasks = self.worker_queues[worker]
@@ -503,16 +505,15 @@ class ClusterStatusKeeper():
                             assert False
                         # Delete this task entry and finish
                         #print "Popping task entry", duration, job_id, " from worker_queue at worker", worker
-                        time_pop = tasks[task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION] + tasks[task_index][ClusterStatusKeeper.INDEX_OF_BEST_FIT_TIME]
                         tasks.pop(task_index)
-                        #print "[t=", time_pop,"] Tasks queue at core ", worker, "is", tasks
                         break
                     task_index += 1
                 assert task_index < original_task_queue_length, (" %r %r - offending value for task_duration: %r %i %i %i %i" % (task_index, original_task_queue_length, duration,job_id,task_id, num_cores, worker))
         # Subtract this busy time from core free times.
         if increase:
-            self.update_worker_queues_free_time(worker_indices, best_fit_time, best_fit_time + duration, current_time)
+            self.update_worker_queues_free_time(worker_indices, best_fit_time, best_fit_time + int(math.ceil(duration)), current_time)
 
+    #Remove outdated holes
     def update_worker_queues_free_time(self, worker_indices, best_fit_start, best_fit_end, current_time):
         if best_fit_start >= best_fit_end:
             raise AssertionError('Error in update_worker_queues_free_time - best fit start larger than or equal to best fit end')
@@ -520,7 +521,7 @@ class ClusterStatusKeeper():
             raise AssertionError('Error in update_worker_queues_free_time - best fit start happened before current DC time')
 
         # Cleanup stale holes
-        # TODO - ENsur eholes are always ordered by time
+        # TODO - Ensure eholes are always ordered by time
         for worker_index in worker_indices:
             while len(self.worker_queues_free_time_start[worker_index]) > 0:
                 if current_time > self.worker_queues_free_time_end[worker_index][0]:
@@ -1509,7 +1510,7 @@ class Simulation(object):
                     #Already updated this case
                     break
                 chosen_machine = new_chosen_machine
-
+            best_fit_time = int(best_fit_time)
             cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine][task_index]
             machines_chosen_till_now.add(chosen_machine)
             #print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", task_actual_durations[task_index]," arrival time ", current_time, "requesting", cpu_req, "cores"
