@@ -380,6 +380,7 @@ class ClusterStatusKeeper():
             all_slots_list = set()
             all_slots_list_add = all_slots_list.add
             all_slots_list_cores = collections.defaultdict(set)
+            all_slots_fragmentation = collections.defaultdict()
             inf_hole_start = {}
             for core in cores:
                 core_id = core.id
@@ -401,26 +402,51 @@ class ClusterStatusKeeper():
                         delta = 1 if 1 < task_duration else task_duration
                         end = time_end[hole] - task_duration + delta
                         arr = range(start, end, time_granularity)
-                        for start in arr:
-                            #print "[t=",arrival_time,"] For core ", core_id," fitting task of duration", task_duration,"into hole = ", time_start[hole], time_end[hole], "starting at", start
-                            all_slots_list_add(start)
-                            all_slots_list_cores[start].add(core_id)
+                        for start_chunk in arr:
+                            #print "[t=",arrival_time,"] For core ", core_id," fitting task of duration", task_duration,"into hole = ", time_start[hole], time_end[hole], "starting at", start_chunk
+                            all_slots_list_add(start_chunk)
+                            all_slots_list_cores[start_chunk].add(core_id)
+                            if start_chunk not in all_slots_fragmentation.keys():
+                                all_slots_fragmentation[start_chunk] = {}
+                            all_slots_fragmentation[start_chunk][core_id] = max(start_chunk - time_start[hole],time_end[hole] - start_chunk - task_duration)
                     else:
                         all_slots_list_add(start)
                         all_slots_list_cores[start].add(core_id)
+                        if start not in all_slots_fragmentation.keys():
+                            all_slots_fragmentation[start] = {}
+                        all_slots_fragmentation[start][core_id] = start - time_start[hole]
                         inf_hole_start[core_id] = start
 
             for core, inf_start in inf_hole_start.items():
                 for start in all_slots_list_cores.keys():
                     if start > inf_start:
                         all_slots_list_cores[start].add(core)
+                        all_slots_fragmentation[start][core] = start - inf_start
 
             #Arrange in smallest overlapping holes
             #TODO - Look for cores with least fragmentation instead of random selection
             start_times = sorted(all_slots_list)
             for start_time in start_times:
-                if len(all_slots_list_cores[start_time]) >= cpu_req:
-                    cores_list = random.sample(all_slots_list_cores[start_time], cpu_req)
+                cores_available = len(all_slots_list_cores[start_time])
+                if cores_available == cpu_req:
+                    cores_list_for_tasks.append(all_slots_list_cores[start_time])
+                    est_time_for_tasks.append(start_time)
+                    break
+                if cores_available > cpu_req:
+                    #Randomly sample the required number of cores.
+                    if POLICY == "RANDOM":
+                        cores_list = random.sample(all_slots_list_cores[start_time], cpu_req)
+                    else:
+                        cores_fragmented = all_slots_fragmentation[start_time]
+                        if POLICY == "MOST_LEFTOVER":
+                            #Select cores with largest available hole after allocation
+                            sorted_cores_fragmented = sorted(cores_fragmented.items(), key=operator.itemgetter(1), reverse=True)[0:cpu_req]
+                        elif POLICY == "LEAST_LEFTOVER":
+                            #Select cores with smallest available hole after allocation
+                            sorted_cores_fragmented = sorted(cores_fragmented.items(), key=operator.itemgetter(1), reverse=False)[0:cpu_req]
+                        else:
+                            raise AssertionError('Check the name of the policy')
+                        cores_list = dict(sorted_cores_fragmented).keys()
                     #print "Earliest start time for task", index," (duration - ", task_duration,") needing", cpu_req,"cores is ", start_time, "with cores", cores_list
                     # cpu_req is available when the fastest cpu_req number of cores is
                     # available for use at or after arrival_time.
@@ -521,7 +547,7 @@ class ClusterStatusKeeper():
             raise AssertionError('Error in update_worker_queues_free_time - best fit start happened before current DC time')
 
         # Cleanup stale holes
-        # TODO - Ensure eholes are always ordered by time
+        # TODO - Ensure holes are always ordered by time
         for worker_index in worker_indices:
             while len(self.worker_queues_free_time_start[worker_index]) > 0:
                 if current_time > self.worker_queues_free_time_end[worker_index][0]:
@@ -1230,37 +1256,6 @@ class Scheduler(object):
         self.total_jobs_counter = 0
         self.long_tasks_jobs_duration = 0.0
         self.total_tasks_jobs_duration = 0.0
-        self.tasks_jobs_duration_buckets = [float('inf') for i in range(JOB_CHARACTERISTICS_NUM_BUCKETS)]
-
-    # Scheduler class
-    # UNUSED
-    # THE FOLLOWING FUNCTIONS ARE FOR ESTIMATING CUMULATIVE LONG TASKS DURATIONS
-    def increment_task_job_type_duration(self, is_long, num_tasks, est_task_duration):
-        self.total_tasks_jobs_duration += num_tasks * est_task_duration
-        self.total_jobs_counter += 1
-        if is_long:
-            self.long_tasks_jobs_duration += num_tasks * est_task_duration
-
-        # Buckets are filled from highest to lowest index, highest index 
-        # having the most recent sample
-        if self.total_jobs_counter >= JOB_CHARACTERISTICS_NUM_SAMPLES_PER_BUCKET:
-            # Shift buckets to make space
-            for i in range(1, JOB_CHARACTERISTICS_NUM_BUCKETS):
-                self.tasks_jobs_duration_buckets[i - 1] = self.tasks_jobs_duration_buckets[i]
-            # Calculate latest sample
-            self.tasks_jobs_duration_buckets[JOB_CHARACTERISTICS_NUM_BUCKETS - 1] = self.long_tasks_jobs_duration  / self.total_tasks_jobs_duration
-            # Reset counters
-            self.reset_task_job_type_duration()
-
-    def reset_task_job_type_duration(self):
-        self.total_tasks_jobs_duration = 0.0
-        self.long_tasks_jobs_duration = 0.0
-        self.total_jobs_counter = 0
-
-    def get_task_job_type_duration(self):
-        return (self.total_tasks_jobs_duration, self.long_tasks_jobs_duration)
-    # UNUSED
-    # END - THE FOLLOWING FUNCTIONS ARE FOR ESTIMATING CUMULATIVE LONG TASKS DURATIONS
 
 #####################################################################################################################
 #####################################################################################################################
@@ -1704,51 +1699,6 @@ class Simulation(object):
         return probe_events
 
     # Simulation class
-    def get_count_jobs(self, is_long):
-        count_jobs = 0
-        for worker in self.workers:
-            if worker.scheduler is not None:
-                if is_long:
-                    count_jobs += worker.scheduler.long_jobs_counter
-                else:
-                    count_jobs += worker.scheduler.short_jobs_counter
-        return count_jobs
- 
-    # Simulation class
-    # This function calculates the weighted average of long jobs to total jobs
-    def get_weighted_avg(self):
-        long_jobs_weight = 0.0
-        long_jobs_weight_from_counters = 0.0
-        count = 0
-        scheduler_count = 0
-        for scheduler_index in self.scheduler_indices:
-            scheduler = self.workers[scheduler_index].scheduler
-            weight = 0.0
-            long_jobs_scheduler = 0.0
-            for i in range(JOB_CHARACTERISTICS_NUM_BUCKETS):
-                if scheduler.tasks_jobs_duration_buckets[i] != float('inf'):
-                    long_jobs_scheduler +=  (i + 1) * scheduler.tasks_jobs_duration_buckets[i]
-                    weight += i + 1
-            if long_jobs_scheduler > 0.0:
-                scheduler_count += 1
-                long_jobs_weight += float(long_jobs_scheduler) / float(weight)
-
-            total_jobs, long_jobs = scheduler.get_task_job_type_duration()
-            # Only consider data from schedulers that have seen long jobs
-            if long_jobs > 0:
-                long_jobs_weight_from_counters += float(long_jobs) / float(total_jobs)
-                count += 1
-        if scheduler_count > 0:
-            ratio = long_jobs_weight / float(scheduler_count)
-            nodes = int(math.floor(TOTAL_MACHINES * ratio))
-            return nodes
-        #Insufficient data points yet
-        if count > 0:
-            return int(math.floor(TOTAL_MACHINES * float(long_jobs_weight_from_counters) / float(count)))
-        return TOTAL_MACHINES / 2
-
-
-    # Simulation class
     # Contains optimization to sort workers just once
     def send_probes_murmuration(self, job, current_time, worker_indices, btmap):
         self.jobs[job.id] = job
@@ -1998,13 +1948,7 @@ HEARTBEAT_DELAY                 = int(sys.argv[19])
 MIN_NR_PROBES                   = int(sys.argv[20])
 SBP_ENABLED                     = (sys.argv[21] == "yes")
 SYSTEM_SIMULATED                = sys.argv[22]  
-IS_COUNT_SAMPLED                = (sys.argv[23] == "yes")   # A "no" indicates time based sampling
-JOB_CHARACTERISTICS_NUM_BUCKETS        = int(sys.argv[24])
-JOB_CHARACTERISTICS_TOTAL_NUM_SAMPLES  = int(sys.argv[25])
-
-JOB_CHARACTERISTICS_NUM_SAMPLES_PER_BUCKET = 0
-if JOB_CHARACTERISTICS_NUM_BUCKETS > 0:
-    JOB_CHARACTERISTICS_NUM_SAMPLES_PER_BUCKET = JOB_CHARACTERISTICS_TOTAL_NUM_SAMPLES / JOB_CHARACTERISTICS_NUM_BUCKETS
+POLICY                          = sys.argv[23]              #RANDOM, LEAST_LEFTOVER, MOST_LEFTOVER
 
 #MIN_NR_PROBES = 20 #1/100*TOTAL_MACHINES
 CAP_SRPT_SBP = 5 #cap on the % of slowdown a job can tolerate for SRPT and SBP
