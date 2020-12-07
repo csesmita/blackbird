@@ -220,7 +220,6 @@ class JobArrival(Event, file):
                 # Long job - Sparrow
                 if SYSTEM_SIMULATED == "Hawk":
                     worker_indices = self.simulation.find_machines_random(PROBE_RATIO, self.job.num_tasks, set(range(TOTAL_MACHINES)), MIN_NR_PROBES, self.job.cpu_reqs_by_tasks)
-
                 else:
                     worker_indices = self.simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, self.simulation.big_partition_workers,MIN_NR_PROBES)
 
@@ -381,6 +380,7 @@ class ClusterStatusKeeper():
             all_slots_list_add = all_slots_list.add
             all_slots_list_cores = collections.defaultdict(set)
             all_slots_fragmentation = collections.defaultdict()
+            all_slots_fragmentation = dict()
             inf_hole_start = {}
             for core in cores:
                 core_id = core.id
@@ -424,7 +424,6 @@ class ClusterStatusKeeper():
                         all_slots_fragmentation[start][core] = start - inf_start
 
             #Arrange in smallest overlapping holes
-            #TODO - Look for cores with least fragmentation instead of random selection
             start_times = sorted(all_slots_list)
             for start_time in start_times:
                 cores_available = len(all_slots_list_cores[start_time])
@@ -453,7 +452,6 @@ class ClusterStatusKeeper():
                     cores_list_for_tasks.append(cores_list)
                     est_time_for_tasks.append(start_time)
                     break
-
         if len(est_time_for_tasks) != len(cpu_reqs):
             raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of estimated time for tasks and cpus requested')
         if len(cores_list_for_tasks) != len(cpu_reqs):
@@ -669,6 +667,7 @@ class TaskEndEventForMachines():
             del Job.per_job_task_info[self.job_id][self.this_task_id]
 
         worker = self.simulation.workers[self.worker_index]
+        worker.busy_time += self.task_duration
         worker.tstamp_start_crt_big_task =- 1
 
         return worker.free_slot(current_time)
@@ -904,7 +903,7 @@ class Worker(object):
         self.btmap = None
         self.btmap_tstamp = -1
         # Parameter to measure how long this worker is busy in the total run.
-        self.busy_time = 0
+        self.busy_time = 0.0
 
         #Role of a scheduler?
         self.scheduler = None
@@ -1812,8 +1811,6 @@ class Simulation(object):
         assert task_cpu_request == len(core_indices)
         # Machine busy time should be a sum of worker busy times.
         workers = self.workers
-        for worker_id in core_indices:
-            workers[worker_id].busy_time += task_duration 
         task_completion_time = task_duration + current_time
         if SYSTEM_SIMULATED == "Hawk":
             #Account for time for the probe to get task data and details.
@@ -1920,7 +1917,7 @@ SMALL = 0
 job_start_tstamps = {}
 
 random.seed(123456798)
-if(len(sys.argv) != 26):
+if(len(sys.argv) != 24):
     print "Incorrent number of parameters."
     sys.exit(1)
 
