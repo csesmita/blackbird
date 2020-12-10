@@ -351,11 +351,14 @@ class ClusterStatusKeeper():
     # Might return smaller values for smaller cpu req, even if those requests come in later.
     # Also, converts holes to ints except the last entry in end which is float('inf')
     def get_machine_est_wait(self, cores, cpu_reqs, arrival_time, task_durations):
+        global core_loop_time, inf_loop_time, total_sort_time, policy_loop_time, get_est_wait_time_profile
         if len(cpu_reqs) != len(task_durations):
             raise AssertionError('Error in parameters to get_machine_est_wait - mismatch in lengths of cpu requests and task duration arrays')
         est_time_for_tasks = []
         cores_list_for_tasks = []
         num_cores = len(cores)
+
+        get_est_wait_time_profile_start = time.time()
 
         # Generate all possible holes to fit each task (D=task duration, N = num cpus needed)
         arrival_time = int(math.ceil(arrival_time))
@@ -375,6 +378,7 @@ class ClusterStatusKeeper():
             all_slots_fragmentation = collections.defaultdict()
             all_slots_fragmentation = dict()
             inf_hole_start = {}
+            core_loop_time_start = time.time()
             for core in cores:
                 core_id = core.id
                 time_start = self.worker_queues_free_time_start[core_id]
@@ -408,14 +412,21 @@ class ClusterStatusKeeper():
                         all_slots_fragmentation[start][core_id] = start - time_start[hole]
                         inf_hole_start[core_id] = start
 
+            core_loop_time += time.time() - core_loop_time_start
+            inf_loop_start = time.time()
             for core, inf_start in inf_hole_start.items():
                 for start in all_slots_list_cores.keys():
                     if start > inf_start:
                         all_slots_list_cores[start].add(core)
                         all_slots_fragmentation[start][core] = start - inf_start
+            inf_loop_time += time.time() - inf_loop_start
 
             #Arrange in smallest overlapping holes
+            sort_time_start = time.time()
             start_times = sorted(all_slots_list)
+            total_sort_time += time.time() - sort_time_start
+
+            policy_loop_start = time.time()
             for start_time in start_times:
                 cores_available = len(all_slots_list_cores[start_time])
                 if cores_available == cpu_req:
@@ -443,10 +454,13 @@ class ClusterStatusKeeper():
                     cores_list_for_tasks.append(cores_list)
                     est_time_for_tasks.append(start_time)
                     break
+            policy_loop_time += time.time() - policy_loop_start
+
         if len(est_time_for_tasks) != len(cpu_reqs):
             raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of estimated time for tasks and cpus requested')
         if len(cores_list_for_tasks) != len(cpu_reqs):
             raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of cores list for tasks and cpus requested')
+        get_est_wait_time_profile += time.time() - get_est_wait_time_profile_start
         return (est_time_for_tasks, cores_list_for_tasks)
 
     # ClusterStatusKeeper class
@@ -1857,6 +1871,11 @@ if(len(sys.argv) != 24):
     sys.exit(1)
 
 utilization = 0
+policy_loop_time = 0
+core_loop_time = 0
+total_sort_time = 0
+inf_loop_time = 0
+get_est_wait_time_profile = 0
 
 WORKLOAD_FILE                   = sys.argv[1]
 stealing                        = (sys.argv[2] == "yes")
@@ -1891,6 +1910,7 @@ s = Simulation(MONITOR_INTERVAL, stealing, SCHEDULE_BIG_CENTRALIZED, WORKLOAD_FI
 s.run()
 
 print "Simulation ended in ", (time.time() - t1), " s "
+print "Get estimated wait time took ", get_est_wait_time_profile,"s, with core loop - ", core_loop_time, "s, infinite hole loop -", inf_loop_time, "s, sorting -", total_sort_time, "s, policy time - ", policy_loop_time
 print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine ", POLICY," hole fitting policy is ", utilization
 
 finished_file.close()
