@@ -513,7 +513,8 @@ class ClusterStatusKeeper(object):
                         tasks.pop(task_index)
                         break
                     task_index += 1
-                assert task_index < original_task_queue_length, (" %r %r - offending value for task_duration: %r %r %i" % (task_index, original_task_queue_length, duration,job_id,worker))
+                if  task_index >= original_task_queue_length:
+                    raise AssertionError(" %r %r - offending value for task_duration: %r %r %i" % (task_index, original_task_queue_length, duration,job_id,worker))
                 if(len(tasks) == 0):
                     self.btmap.flip(worker)
 
@@ -546,7 +547,8 @@ class ClusterStatusKeeper(object):
                         #print "Popping at index", task_index,"- [t=", arrival_time,"] duration", duration,". New Tasks queue at core ", worker, "is", tasks
                         break
                     task_index += 1
-                assert task_index < original_task_queue_length, (" %r %r - offending value for task_duration: %r %i %i %i %i" % (task_index, original_task_queue_length, duration,job_id,task_id, num_cores, worker))
+                if  task_index >= original_task_queue_length:
+                    raise AssertionError(" %r %r - offending value for task_duration: %r %i %i %i %i" % (task_index, original_task_queue_length, duration,job_id,task_id, num_cores, worker))
         # Subtract this busy time from core free times.
         if increase:
             best_fit_end = best_fit_time + int(math.ceil(duration))
@@ -672,8 +674,8 @@ class TaskEndEventForMachines():
         self.delete_task_entry = delete_task_entry
 
     def run(self, current_time):
-        if SYSTEM_SIMULATED == "Hawk":
-            assert self.SCHEDULE_BIG_CENTRALIZED == False, "Sparrow trying to schedule in a centralized manner?"
+        if SYSTEM_SIMULATED == "Hawk" and self.SCHEDULE_BIG_CENTRALIZED:
+            raise AssertionError("Sparrow trying to schedule in a centralized manner?")
 
         if self.SCHEDULE_BIG_CENTRALIZED == True:
             self.status_keeper.update_machine_queue([self.worker_index], False, self.task_duration, self.job_id, current_time, self.this_task_id, self.num_cores, 0)
@@ -746,7 +748,8 @@ class Machine(object):
             # Extract all information
             core_indices = task_info[0]
             job_id = task_info[1]
-            assert len(self.simulation.jobs[job_id].unscheduled_tasks) > 0
+            if len(self.simulation.jobs[job_id].unscheduled_tasks) <= 0:
+                raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
             task_index = task_info[2]
             task_cpu_request = task_info[3]
             task_actual_duration = task_info[4]
@@ -1420,7 +1423,8 @@ class Simulation(object):
     # TODO: Other strategies - bulk allocation using well-fit, not best fit for tasks
     # Hole filling strategies, etc
     def find_workers_long_job_prio_murmuration(self, job_id, num_tasks, estimated_task_duration, current_time, simulation, hash_machines_considered, cpu_reqs_by_tasks, task_actual_durations):
-        assert num_tasks == len(cpu_reqs_by_tasks)
+        if num_tasks != len(cpu_reqs_by_tasks):
+            raise AssertionError('Number of tasks provided not equal to length of cpu_reqs_by_tasks list')
         if hash_machines_considered == []:
             return []
         cores_lists_for_reqs_to_machine_matrix = {}
@@ -1701,7 +1705,8 @@ class Simulation(object):
         # Find workers and update the cluster status for long jobs
         # Returns - [[m1,[cores]], [m2,[cores]],...]
         machine_indices = self.find_workers_long_job_prio_murmuration(job.id, job.num_tasks, job.estimated_task_duration, current_time, self, set(range(TOTAL_MACHINES)), job.cpu_reqs_by_tasks, job.actual_task_duration)
-        assert len(machine_indices) == job.num_tasks
+        if len(machine_indices) != job.num_tasks:
+            raise AssertionError('Send probes received unequal number of machine indices and tasks')
         current_time += NETWORK_DELAY
         machine_ids = set()
         for index in range(len(machine_indices)):
@@ -1709,7 +1714,8 @@ class Simulation(object):
             machine_id = machine_allocation[0]
             core_ids = machine_allocation[1]
             best_fit_time = machine_allocation[2]
-            assert len(core_ids) == job.cpu_reqs_by_tasks[index], "Not enough machines that pass filter requirement of job"
+            if len(core_ids) != job.cpu_reqs_by_tasks[index]:
+                raise AssertionError("Not enough machines that pass filter requirement of job")
             self.machines[machine_id].add_machine_probe(core_ids, job.id, index, job.cpu_reqs_by_tasks[index], job.actual_task_duration[index], job.estimated_task_duration, job.job_type_for_scheduling, current_time, best_fit_time)
             machine_ids.add(machine_id)
 
@@ -1779,9 +1785,11 @@ class Simulation(object):
 
         Job.per_job_task_info[job_id][task_index] = current_time
         events = []
-        assert job.actual_task_duration[task_index] == task_duration
+        if job.actual_task_duration[task_index] != task_duration:
+            raise AssertionError('The task index does not match the task duration')
         job.unscheduled_tasks.remove(task_duration)
-        assert task_cpu_request == len(core_indices)
+        if task_cpu_request != len(core_indices):
+            raise AssertionError('The task cpu requested does not match the length of cores provided')
         # Machine busy time should be a sum of worker busy times.
         workers = self.workers
         task_completion_time = task_duration + current_time
