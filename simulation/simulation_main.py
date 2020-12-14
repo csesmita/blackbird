@@ -18,12 +18,22 @@ import collections
 import os
 import numpy
 
+from multiprocessing import Pool
+from multiprocessing import cpu_count
+
 class TaskDurationDistributions:
     CONSTANT, MEAN, FROM_FILE  = range(3)
 class EstimationErrorDistribution:
     CONSTANT, RANDOM, MEAN  = range(3)
 
 RATIO_SCHEDULERS_TO_CORES = 0.1
+
+# An argument unwrapping function for invoking get_machine_est_wait in Pool.
+def unwrap_get_machine_est_wait(arg):
+    if len(arg) != 5:
+        # keeper, machine_id, cpu_req, arrival_time, task_duration
+        raise AssertionError('unwrap_get_machine_est_wait - Expected 5 arguments, received '+ str(len(arg)) + "arguments")
+    return arg[0].get_machine_est_wait(arg[1], arg[2], arg[3], arg[4])
 
 class Job(object):
     job_count = 1
@@ -319,7 +329,7 @@ class ProbeEventForWorkers(Event):
 # ClusterStatusKeeper: Keeps track of tasks assigned to workers and the 
 # estimated start time of each task. The queue also includes currently
 # executing task at the worker.
-class ClusterStatusKeeper():
+class ClusterStatusKeeper(object):
     INDEX_OF_ARRIVAL_TIME = 0
     INDEX_OF_TASK_DURATION = 1
     INDEX_OF_JOB_ID = 2
@@ -350,7 +360,8 @@ class ClusterStatusKeeper():
     # Returns - ([est_task1, est_task2, ...],[[list of cores],[list of core], [],...])
     # Might return smaller values for smaller cpu req, even if those requests come in later.
     # Also, converts holes to ints except the last entry in end which is float('inf')
-    def get_machine_est_wait(self, cores, cpu_reqs, arrival_time, task_durations):
+    def get_machine_est_wait(self, machine_id, cpu_reqs, arrival_time, task_durations):
+        cores = simulation.machines[machine_id].cores
         global core_loop_time, inf_loop_time, total_sort_time, policy_loop_time, get_est_wait_time_profile
         if len(cpu_reqs) != len(task_durations):
             raise AssertionError('Error in parameters to get_machine_est_wait - mismatch in lengths of cpu requests and task duration arrays')
@@ -461,7 +472,9 @@ class ClusterStatusKeeper():
         if len(cores_list_for_tasks) != len(cpu_reqs):
             raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of cores list for tasks and cpus requested')
         get_est_wait_time_profile += time.time() - get_est_wait_time_profile_start
-        return (est_time_for_tasks, cores_list_for_tasks)
+        est_time_for_tasks.append(machine_id)
+        return (est_time_for_tasks, cores_list_for_tasks, machine_id)
+
 
     # ClusterStatusKeeper class
     def get_workers_queue_status(self, worker_index):
@@ -1287,7 +1300,7 @@ class Simulation(object):
         self.scheduled_last_job = False
 
         # Only for Murmuration will CORES_PER_MACHINE be >= 1. For the rest, it is = 1.
-        self.cluster_status_keeper = ClusterStatusKeeper(TOTAL_MACHINES * CORES_PER_MACHINE)
+        self.cluster_status_keeper = keeper
         self.stealing_allowed = stealing_allowed
         self.SCHEDULE_BIG_CENTRALIZED = SCHEDULE_BIG_CENTRALIZED
         self.WORKLOAD_FILE = WORKLOAD_FILE
@@ -1412,18 +1425,26 @@ class Simulation(object):
             return []
         cores_lists_for_reqs_to_machine_matrix = {}
         est_time_list = []
-
-        # First, build per machine per cpu request estimated wait time and cores list.
+        # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
+        best_fit_for_tasks = []
+        current_time += NETWORK_DELAY
         get_machine_time = self.cluster_status_keeper.get_machine_est_wait
-        for machine_id in hash_machines_considered:
-            machine = self.machines[machine_id]
-            # Returns ([est_time_at_machine...], [[list of absolute core ids],[],[]])
-            est_time, cores_list = get_machine_time(machine.cores, cpu_reqs_by_tasks, current_time + NETWORK_DELAY, task_actual_durations)
-            est_time.append(machine_id)
-            est_time_list.append(est_time)
-            cores_lists_for_reqs_to_machine_matrix[machine_id] = {}
-            for task_index in xrange(num_tasks):
-                cores_lists_for_reqs_to_machine_matrix[machine_id][task_index] = cores_list[task_index]
+        machines = self.machines
+        if __name__ == '__main__':
+            pool = Pool(processes=cpu_count() - 1)
+            args = [(keeper, machine_id, cpu_reqs_by_tasks, current_time, task_actual_durations) for machine_id in hash_machines_considered]
+            vector = list(pool.map(unwrap_get_machine_est_wait, args))
+            pool.close()
+            pool.join()
+            est_and_cores_across_machines = zip(*vector)
+            est_time_list = list(est_and_cores_across_machines[0])
+
+            for index in range(len(vector)):
+                machine_id = vector[index][2]
+                if machine_id not in cores_lists_for_reqs_to_machine_matrix.keys():
+                    cores_lists_for_reqs_to_machine_matrix[machine_id] = {}
+                for task_index in range(num_tasks):
+                    cores_lists_for_reqs_to_machine_matrix[machine_id][task_index] = vector[index][1][task_index]
 
         # Start collapsing the matrix for best fit
         # est_time_machine_array = [[est_time..., m1], [est_time, ...., m2], ... ]
@@ -1431,8 +1452,6 @@ class Simulation(object):
         #Optimization for lazy update of cpu requests.
         #Only update cores if they were selected earlier from this machine.
         machines_chosen_till_now = set()
-        # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
-        best_fit_for_tasks = []
         for task_index in xrange(num_tasks):
             # est_time_across_machines_for_this_task = [t1 t2 t3,... tM] for this task across machines
             #print"------- Printing est_time_machine_array for job_id ", job_id, task_index, "--------"
@@ -1444,7 +1463,7 @@ class Simulation(object):
             chosen_machine = int(est_time_machine_array[row_index][num_tasks])
             cpu_req = cpu_reqs_by_tasks[task_index]
             while chosen_machine in machines_chosen_till_now:
-                est_time, core_list = get_machine_time(self.machines[chosen_machine].cores, [cpu_req], current_time + NETWORK_DELAY, [task_actual_durations[task_index]])
+                est_time, core_list, machine_id = get_machine_time(chosen_machine, [cpu_req], current_time, [task_actual_durations[task_index]])
                 est_time_machine_array[chosen_machine][task_index] = est_time[0]
                 cores_lists_for_reqs_to_machine_matrix[chosen_machine][task_index] = core_list[0]
                 est_time_across_machines_for_this_task = est_time_machine_array[:,task_index]
@@ -1905,9 +1924,9 @@ POLICY                          = sys.argv[23]              #RANDOM, LEAST_LEFTO
 CAP_SRPT_SBP = 5 #cap on the % of slowdown a job can tolerate for SRPT and SBP
 
 t1 = time.time()
-
-s = Simulation(MONITOR_INTERVAL, stealing, SCHEDULE_BIG_CENTRALIZED, WORKLOAD_FILE,CUTOFF_THIS_EXP,CUTOFF_BIG_SMALL,ESTIMATION,OFF_MEAN_BOTTOM,OFF_MEAN_TOP,TOTAL_MACHINES)
-s.run()
+keeper = ClusterStatusKeeper(TOTAL_MACHINES * CORES_PER_MACHINE)
+simulation = Simulation(MONITOR_INTERVAL, stealing, SCHEDULE_BIG_CENTRALIZED, WORKLOAD_FILE,CUTOFF_THIS_EXP,CUTOFF_BIG_SMALL,ESTIMATION,OFF_MEAN_BOTTOM,OFF_MEAN_TOP,TOTAL_MACHINES)
+simulation.run()
 
 print "Simulation ended in ", (time.time() - t1), " s "
 print "Get estimated wait time took ", get_est_wait_time_profile,"s, with core loop - ", core_loop_time, "s, infinite hole loop -", inf_loop_time, "s, sorting -", total_sort_time, "s, policy time - ", policy_loop_time
