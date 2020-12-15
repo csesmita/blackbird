@@ -518,6 +518,13 @@ class ClusterStatusKeeper(object):
                 if(len(tasks) == 0):
                     self.btmap.flip(worker)
 
+    def print_core_queue(self, core_index):
+        tasks = self.worker_queues[core_index]
+        print "Tasks at core", core_index," - "
+        for task in tasks:
+            print task
+
+
     # ClusterStatusKeeper class
     # Machine specific
     # Similar to update_worker_queue() in queueing same task at multiple
@@ -544,7 +551,7 @@ class ClusterStatusKeeper(object):
                         # Delete this task entry and finish
                         #print "Popping task entry", duration, job_id, " from worker_queue at worker", worker
                         tasks.pop(task_index)
-                        #print "Popping at index", task_index,"- [t=", arrival_time,"] duration", duration,". New Tasks queue at core ", worker, "is", tasks
+                        #print "Popped at index", task_index,"- [t=", arrival_time,"] duration", duration,". New Tasks queue at core ", worker, "is", tasks
                         break
                     task_index += 1
                 if  task_index >= original_task_queue_length:
@@ -730,8 +737,11 @@ class Machine(object):
         return self.try_process_next_probe_in_the_queue(current_time)
 
     #Machine class
-    # Try to process as many queued probes as possible.
-    #Assumes best fit time is always unique across tasks on the same machine, cores.
+    #Assumes best fit time is always unique across tasks on the same (machine, cores).
+    #Pop best fitting tasks across different cores.
+    #Check which has the fastest completion time and process that task.
+    #Re-insert the rest of the tasks back into machine queue.
+    #This ensures TaskEndEvents, and hence DC time, are monotonically increasing functions.
     def try_process_next_probe_in_the_queue(self, current_time):
         if SYSTEM_SIMULATED == "Hawk":
             return self.try_process_next_random_probe_single(current_time)
@@ -761,7 +771,10 @@ class Machine(object):
                     # All assigned core indices for this task not yet available.
                     print "Best fit time", best_fit_time, "current time", current_time, "probe arrival time", probe_arrival_time,
                     print "All assigned cores not available for task",task_info ,
-                    print "Cores availability", self.free_cores.keys()
+                    print "Free Cores currently availability", self.free_cores.keys()
+                    print "Task queues at assigned cores"
+                    for core_index in core_indices:
+                        keeper.print_core_queue(core_index)
                     raise AssertionError('best fit time within current time, yet cores not available?')
                 #Wait for the next event to trigger this task processing
                 self.queued_probes.put((best_fit_time, task_info))
@@ -1486,7 +1499,7 @@ class Simulation(object):
             best_fit_for_tasks.append([chosen_machine, cores_at_chosen_machine, best_fit_time])
 
             #Update est time at this machine and its cores
-            self.cluster_status_keeper.update_machine_queue(cores_at_chosen_machine, True, task_actual_durations[task_index], job_id, current_time + NETWORK_DELAY, task_index, cpu_req, best_fit_time)
+            self.cluster_status_keeper.update_machine_queue(cores_at_chosen_machine, True, task_actual_durations[task_index], job_id, current_time, task_index, cpu_req, best_fit_time)
 
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
         return best_fit_for_tasks
@@ -1796,7 +1809,7 @@ class Simulation(object):
         if SYSTEM_SIMULATED == "Hawk":
             #Account for time for the probe to get task data and details.
             task_completion_time += 2 * NETWORK_DELAY
-        #print current_time, " machine:", machine.id, core_indices, " task from job ", job_id, " task index: ", task_index," task duration: ", task_duration, " arrived at ", probe_arrival_time, "and will finish at time ", task_completion_time
+        #print current_time, " machine ", machine.id, "cores ",core_indices, " job id ", job_id, " task index: ", task_index," task duration: ", task_duration, " arrived at ", probe_arrival_time, "and will finish at time ", task_completion_time
 
         is_job_complete = job.update_task_completion_details(task_completion_time)
 
