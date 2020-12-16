@@ -526,7 +526,7 @@ class ClusterStatusKeeper(object):
             if increase:
                 tasks.append([arrival_time, duration, job_id, task_id, num_cores, best_fit_time])
                 #print "[", arrival_time,"] Appending task entry", duration, job_id,task_id, num_cores," to worker_queue at worker", worker, "at time ", best_fit_time
-                #print "Appending - [t=", arrival_time,"] Tasks queue at core ", worker, "is", tasks
+                #print "Appending - [t=", arrival_time,"] Tasks queue at core", worker, "is", tasks
             else:
                 # Search for the first entry with this (jobid, task_id) and pop the task
                 original_task_queue_length = len(tasks)
@@ -539,7 +539,7 @@ class ClusterStatusKeeper(object):
                         # Delete this task entry and finish
                         #print "Popping task entry", duration, job_id, " from worker_queue at worker", worker
                         tasks.pop(task_index)
-                        #print "Popped at index", task_index,"- [t=", arrival_time,"] duration", duration,". New Tasks queue at core ", worker, "is", tasks
+                        #print "Popped at index", task_index,"- [t=", arrival_time,"] duration", duration,". New Tasks queue at core", worker, "is", tasks
                         break
                     task_index += 1
                 if  task_index >= original_task_queue_length:
@@ -767,9 +767,10 @@ class Machine(object):
                     print "Best fit time", best_fit_time, "current time", current_time, "probe arrival time", probe_arrival_time,
                     print "All assigned cores not available for task",task_info ,
                     print "Free Cores currently availability", self.free_cores.keys()
-                    print "Task queues at assigned cores"
+                    print "Task queues at assigned but unavailable cores"
                     for core_index in core_indices:
-                        keeper.print_core_queue(core_index)
+                        if core_index not in self.free_cores.keys():
+                            keeper.print_core_queue(core_index)
                     raise AssertionError('best fit time within current time, yet cores not available?')
                 #Wait for the next event to trigger this task processing
                 candidate_probes_covered.put((best_fit_time, task_info))
@@ -805,6 +806,7 @@ class Machine(object):
                 #Not our best candidate
                 candidate_probes_covered.put((best_fit_time, task_info))
 
+        core_indices = []
         if earliest_task_completion_time != float('inf'):
             # Extract all information
             core_indices = candidate_task_info[0]
@@ -816,21 +818,20 @@ class Machine(object):
             task_actual_duration = candidate_task_info[4]
             estimated_task_duration = candidate_task_info[5]
             probe_arrival_time = candidate_task_info[6]
-
-            #Reinsert all free cores other than the ones needed
-            for core_index in candidate_cores_covered.keys():
-                if core_index not in core_indices:
-                    self.free_cores[core_index] = candidate_cores_covered[core_index]
-
-            #Reinsert all queued probes that were inspected
-            while not candidate_probes_covered.empty():
-                best_fit_time, task_info = candidate_probes_covered.get()
-                self.queued_probes.put((best_fit_time, task_info))
-
             # Finally, process the current task with all these parameters
             task_status, new_events = self.simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, candidate_processing_time, probe_arrival_time)
             for new_event in new_events:
                 events.append((new_event[0], new_event[1]))
+
+        #Reinsert all free cores other than the ones needed
+        for core_index in candidate_cores_covered.keys():
+            if core_index not in core_indices:
+                self.free_cores[core_index] = candidate_cores_covered[core_index]
+
+        #Reinsert all queued probes that were inspected
+        while not candidate_probes_covered.empty():
+            best_fit_time, task_info = candidate_probes_covered.get()
+            self.queued_probes.put((best_fit_time, task_info))
 
         return events
 
