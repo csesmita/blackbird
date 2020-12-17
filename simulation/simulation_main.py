@@ -512,7 +512,6 @@ class ClusterStatusKeeper(object):
         for task in tasks:
             print task
 
-
     # ClusterStatusKeeper class
     # Machine specific
     # Similar to update_worker_queue() in queueing same task at multiple
@@ -548,6 +547,34 @@ class ClusterStatusKeeper(object):
         if increase:
             best_fit_end = best_fit_time + int(math.ceil(duration))
             self.update_worker_queues_free_time(worker_indices, best_fit_time, best_fit_end, arrival_time)
+
+
+    #This function is needed in the first place to ensure best fit algorithm does not make a false placement
+    #for a hole which is non existent when cores are actually freed. This is because of difference in precision
+    #between best fit time algorithm which takes ints, and actual event and task duration times which are floats.
+    #Best effort adjusting holes to reflect the true best fit start time.
+    #No need to check if it was updated or not. This is because the holes might have all
+    #been taken up end to end. In which case, the tasks will be served on their best fit and completion times.
+    def shift_holes(self, core_indices, previous_best_fit_time, task_duration, current_best_time):
+        for worker_index in core_indices:
+            found_hole = False
+            for hole_index in range(len(self.worker_queues_free_time_end[worker_index]) - 1):
+                end_hole = self.worker_queues_free_time_end[worker_index][hole_index]
+                start_next_hole = self.worker_queues_free_time_start[worker_index][hole_index + 1]
+                if end_hole == previous_best_fit_time and start_next_hole == (previous_best_fit_time + task_duration):
+                    found_hole = True
+                    self.worker_queues_free_time_end[worker_index][hole_index] = current_best_time
+                    self.worker_queues_free_time_start[worker_index][hole_index + 1] = current_best_time + task_duration
+                    #Are the holes of length 0? Then remove them from arrays.
+                    next_index = hole_index + 1
+                    if self.worker_queues_free_time_start[worker_index][hole_index] == self.worker_queues_free_time_end[worker_index][hole_index]:
+                        self.worker_queues_free_time_start[worker_index].pop(hole_index)
+                        self.worker_queues_free_time_end[worker_index].pop(hole_index)
+                        next_index = hole_index
+                    if self.worker_queues_free_time_start[worker_index][next_index] == self.worker_queues_free_time_end[worker_index][next_index]:
+                        self.worker_queues_free_time_start[worker_index].pop(next_index)
+                        self.worker_queues_free_time_end[worker_index].pop(next_index)
+                    break
 
     #Remove outdated holes
     def update_worker_queues_free_time(self, worker_indices, best_fit_start, best_fit_end, current_time):
@@ -762,16 +789,6 @@ class Machine(object):
             probe_arrival_time = task_info[6]
 
             if(not all(x in self.free_cores.keys() for x in core_indices)):
-                if best_fit_time < current_time:
-                    # All assigned core indices for this task not yet available.
-                    print "Best fit time", best_fit_time, "current time", current_time, "probe arrival time", probe_arrival_time,
-                    print "All assigned cores not available for task",task_info ,
-                    print "Free Cores currently availability", self.free_cores.keys()
-                    print "Task queues at assigned but unavailable cores"
-                    for core_index in core_indices:
-                        if core_index not in self.free_cores.keys():
-                            keeper.print_core_queue(core_index)
-                    raise AssertionError('best fit time within current time, yet cores not available?')
                 #Wait for the next event to trigger this task processing
                 candidate_probes_covered.put((best_fit_time, task_info))
                 #Note these cores, they are not ready to execute yet, but important to clear free_cores list.
@@ -806,6 +823,7 @@ class Machine(object):
                 #Not our best candidate
                 candidate_probes_covered.put((best_fit_time, task_info))
 
+        current_time = int(math.ceil(current_time))
         core_indices = []
         if earliest_task_completion_time != float('inf'):
             # Extract all information
@@ -818,6 +836,11 @@ class Machine(object):
             task_actual_duration = candidate_task_info[4]
             estimated_task_duration = candidate_task_info[5]
             probe_arrival_time = candidate_task_info[6]
+
+            if candidate_best_fit_time < current_time:
+                #This can happen due to precision of best fit time being in integers, but not so of task durations.
+                keeper.shift_holes(core_indices, candidate_best_fit_time, int(math.ceil(task_actual_duration)), current_time)
+
             # Finally, process the current task with all these parameters
             task_status, new_events = self.simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, estimated_task_duration, candidate_processing_time, probe_arrival_time)
             for new_event in new_events:
