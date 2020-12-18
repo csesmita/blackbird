@@ -1512,11 +1512,12 @@ class Simulation(object):
         machines = self.machines
         threads_start_time = time.time()
         threads_collection_start_time = time.time()
+        chunk_size = len(hash_machines_considered) / cpu_count()
         if __name__ == '__main__':
-            pool = Pool(processes=cpu_count() - 1)
+            pool = Pool()
             args = [(keeper, machine_id, cpu_reqs_by_tasks, current_time, task_actual_durations) for machine_id in hash_machines_considered]
             loop_collection_start_time = time.time()
-            vector = list(pool.map(unwrap_get_machine_est_wait, args))
+            vector = list(pool.imap(unwrap_get_machine_est_wait, args, chunksize = chunk_size))
             loop_collection_time += time.time() - loop_collection_start_time
             pool.close()
             pool.join()
