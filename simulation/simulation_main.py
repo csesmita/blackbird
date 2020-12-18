@@ -383,7 +383,7 @@ class ClusterStatusKeeper(object):
                 continue
             all_slots_list = BitMap()
             all_slots_list_add = all_slots_list.add
-            all_slots_list_cores = collections.defaultdict(set)
+            all_slots_list_cores = collections.defaultdict(BitMap)
             all_slots_fragmentation = collections.defaultdict()
             all_slots_fragmentation = dict()
             inf_hole_start = {}
@@ -428,13 +428,11 @@ class ClusterStatusKeeper(object):
                         all_slots_list_cores[start].add(core)
                         all_slots_fragmentation[start][core] = start - inf_start
 
-            #Arrange in smallest overlapping holes
-            start_times = sorted(all_slots_list)
-
-            for start_time in start_times:
+            #Assuming all_slots_list is sorted.
+            for start_time in all_slots_list:
                 cores_available = len(all_slots_list_cores[start_time])
                 if cores_available == cpu_req:
-                    cores_list_for_tasks.append(all_slots_list_cores[start_time])
+                    cores_list_for_tasks.append(list(all_slots_list_cores[start_time]))
                     est_time_for_tasks.append(start_time)
                     break
                 if cores_available > cpu_req:
