@@ -575,7 +575,6 @@ class ClusterStatusKeeper(object):
                     if self.worker_queues_free_time_start[worker_index][next_index] >= self.worker_queues_free_time_end[worker_index][next_index]:
                         self.worker_queues_free_time_start[worker_index].pop(next_index)
                         self.worker_queues_free_time_end[worker_index].pop(next_index)
-                    print "Updated holes at worker", worker_index," is ", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index]
                     break
 
     #Remove outdated holes
