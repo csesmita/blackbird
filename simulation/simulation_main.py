@@ -17,6 +17,7 @@ import copy
 import collections
 import os
 import numpy
+from pyroaring import BitMap
 
 from multiprocessing import Pool
 from multiprocessing import cpu_count
@@ -380,7 +381,7 @@ class ClusterStatusKeeper(object):
                 est_time_for_tasks.append(float('inf'))
                 cores_list_for_tasks.append([])
                 continue
-            all_slots_list = set()
+            all_slots_list = BitMap()
             all_slots_list_add = all_slots_list.add
             all_slots_list_cores = collections.defaultdict(set)
             all_slots_fragmentation = collections.defaultdict()
@@ -1538,7 +1539,7 @@ class Simulation(object):
         est_time_machine_array = numpy.array(est_time_list)
         #Optimization for lazy update of cpu requests.
         #Only update cores if they were selected earlier from this machine.
-        machines_chosen_till_now = set()
+        machines_chosen_till_now = BitMap()
         placement_start_time = time.time()
         for task_index in xrange(num_tasks):
             # est_time_across_machines_for_this_task = [t1 t2 t3,... tM] for this task across machines
@@ -1793,7 +1794,7 @@ class Simulation(object):
         if len(machine_indices) != job.num_tasks:
             raise AssertionError('Send probes received unequal number of machine indices and tasks')
         current_time += NETWORK_DELAY
-        machine_ids = set()
+        machine_ids = BitMap()
         for index in range(len(machine_indices)):
             machine_allocation = machine_indices[index]
             machine_id = machine_allocation[0]
