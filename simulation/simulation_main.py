@@ -361,9 +361,9 @@ class ClusterStatusKeeper(object):
     # Might return smaller values for smaller cpu req, even if those requests come in later.
     # Also, converts holes to ints except the last entry in end which is float('inf')
     def get_machine_est_wait(self, machine_id, cpu_reqs, arrival_time, task_durations):
-        cores = simulation.machines[machine_id].cores
         if len(cpu_reqs) != len(task_durations):
             raise AssertionError('Error in parameters to get_machine_est_wait - mismatch in lengths of cpu requests and task duration arrays')
+        cores = simulation.machines[machine_id].cores
         est_time_for_tasks = []
         cores_list_for_tasks = []
         num_cores = len(cores)
@@ -394,6 +394,8 @@ class ClusterStatusKeeper(object):
                     raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of start and end hole arrays')
                 for hole in xrange(len(time_end)):
                     if time_start[hole] >= time_end[hole]:
+                        print "Error in get_machine_est_wait - start of hole is equal or larger than end of hole"
+                        print "Core index", core_id, "hole id ", hole, "start is ", time_start[hole], "end is ", time_end[hole]
                         raise AssertionError('Error in get_machine_est_wait - start of hole is equal or larger than end of hole')
                     # Skip holes before arrival time
                     if time_end[hole] < arrival_time:
@@ -567,13 +569,14 @@ class ClusterStatusKeeper(object):
                     self.worker_queues_free_time_start[worker_index][hole_index + 1] = current_best_time + task_duration
                     #Are the holes of length 0? Then remove them from arrays.
                     next_index = hole_index + 1
-                    if self.worker_queues_free_time_start[worker_index][hole_index] == self.worker_queues_free_time_end[worker_index][hole_index]:
+                    if self.worker_queues_free_time_start[worker_index][hole_index] >= self.worker_queues_free_time_end[worker_index][hole_index]:
                         self.worker_queues_free_time_start[worker_index].pop(hole_index)
                         self.worker_queues_free_time_end[worker_index].pop(hole_index)
                         next_index = hole_index
-                    if self.worker_queues_free_time_start[worker_index][next_index] == self.worker_queues_free_time_end[worker_index][next_index]:
+                    if self.worker_queues_free_time_start[worker_index][next_index] >= self.worker_queues_free_time_end[worker_index][next_index]:
                         self.worker_queues_free_time_start[worker_index].pop(next_index)
                         self.worker_queues_free_time_end[worker_index].pop(next_index)
+                    print "Updated holes at worker", worker_index," is ", self.worker_queues_free_time_start[worker_index], self.worker_queues_free_time_end[worker_index]
                     break
 
     #Remove outdated holes
@@ -1500,6 +1503,7 @@ class Simulation(object):
             raise AssertionError('Number of tasks provided not equal to length of cpu_reqs_by_tasks list')
         if hash_machines_considered == []:
             return []
+        global threads_total_time, placement_total_time, threads_collection_time, loop_collection_time
         cores_lists_for_reqs_to_machine_matrix = {}
         est_time_list = []
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
@@ -1507,14 +1511,19 @@ class Simulation(object):
         current_time += NETWORK_DELAY
         get_machine_time = self.cluster_status_keeper.get_machine_est_wait
         machines = self.machines
+        threads_start_time = time.time()
+        threads_collection_start_time = time.time()
         if __name__ == '__main__':
             pool = Pool(processes=cpu_count() - 1)
             args = [(keeper, machine_id, cpu_reqs_by_tasks, current_time, task_actual_durations) for machine_id in hash_machines_considered]
+            loop_collection_start_time = time.time()
             vector = list(pool.map(unwrap_get_machine_est_wait, args))
+            loop_collection_time += time.time() - loop_collection_start_time
             pool.close()
             pool.join()
             est_and_cores_across_machines = zip(*vector)
             est_time_list = list(est_and_cores_across_machines[0])
+            threads_collection_time += time.time() - threads_collection_start_time
 
             for index in range(len(vector)):
                 machine_id = vector[index][2]
@@ -1522,6 +1531,7 @@ class Simulation(object):
                     cores_lists_for_reqs_to_machine_matrix[machine_id] = {}
                 for task_index in range(num_tasks):
                     cores_lists_for_reqs_to_machine_matrix[machine_id][task_index] = vector[index][1][task_index]
+        threads_total_time += time.time() - threads_start_time
 
         # Start collapsing the matrix for best fit
         # est_time_machine_array = [[est_time..., m1], [est_time, ...., m2], ... ]
@@ -1529,6 +1539,7 @@ class Simulation(object):
         #Optimization for lazy update of cpu requests.
         #Only update cores if they were selected earlier from this machine.
         machines_chosen_till_now = set()
+        placement_start_time = time.time()
         for task_index in xrange(num_tasks):
             # est_time_across_machines_for_this_task = [t1 t2 t3,... tM] for this task across machines
             #print"------- Printing est_time_machine_array for job_id ", job_id, task_index, "--------"
@@ -1561,6 +1572,7 @@ class Simulation(object):
             #Update est time at this machine and its cores
             self.cluster_status_keeper.update_machine_queue(cores_at_chosen_machine, True, task_actual_durations[task_index], job_id, current_time, task_index, cpu_req, best_fit_time)
 
+        placement_total_time += time.time() - placement_start_time
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
         return best_fit_for_tasks
 
@@ -1971,6 +1983,10 @@ if(len(sys.argv) != 24):
     sys.exit(1)
 
 utilization = 0
+placement_total_time = 0
+threads_total_time = 0
+loop_collection_time = 0
+threads_collection_time = 0
 
 WORKLOAD_FILE                   = sys.argv[1]
 stealing                        = (sys.argv[2] == "yes")
@@ -2005,6 +2021,8 @@ simulation = Simulation(MONITOR_INTERVAL, stealing, SCHEDULE_BIG_CENTRALIZED, WO
 simulation.run()
 
 print "Simulation ended in ", (time.time() - t1), " s "
+print "Threads total time ", threads_total_time, "placement total time ", placement_total_time
+print "Threads collection time ", threads_collection_time, "loop collection time ", loop_collection_time
 print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine ", POLICY," hole fitting policy is ", utilization
 
 finished_file.close()
