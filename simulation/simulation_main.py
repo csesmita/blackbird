@@ -36,17 +36,16 @@ def unwrap_get_machine_est_wait(arg):
     return arg[0].get_machine_est_wait(arg[1], arg[2], arg[3], arg[4])
 
 class Job(object):
-    job_count = 1
-    per_job_task_info = {}
-
     def __init__(self, task_distribution, line, estimate_distribution, off_mean_bottom, off_mean_top):
+        global job_count
+
         job_args                    = (line.split('\n'))[0].split()
         self.start_time             = float(job_args[0])
         self.num_tasks              = int(job_args[1])
         mean_task_duration          = float(job_args[2])
 
-        self.id = Job.job_count
-        Job.job_count += 1
+        self.id = job_count
+        job_count += 1
         self.completed_tasks_count = 0
         self.end_time = self.start_time
         self.unscheduled_tasks = collections.deque()
@@ -172,7 +171,7 @@ class JobArrival(Event, file):
         self.jobs_file = jobs_file
 
     def run(self, current_time):
-        global t1
+        global t1, per_job_task_info
         new_events = []
 
         long_job = self.job.job_type_for_scheduling == BIG
@@ -233,9 +232,9 @@ class JobArrival(Event, file):
                 else:
                     worker_indices = self.simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, self.simulation.big_partition_workers,MIN_NR_PROBES)
 
-        Job.per_job_task_info[self.job.id] = {}
+        per_job_task_info[self.job.id] = {}
         for tasknr in range(0,self.job.num_tasks):
-            Job.per_job_task_info[self.job.id][tasknr] =- 1 
+            per_job_task_info[self.job.id][tasknr] =- 1
 
         new_events = self.simulation.send_probes(self.job, current_time, worker_indices, btmap)
 
@@ -672,10 +671,12 @@ class TaskEndEvent():
         assert SYSTEM_SIMULATED != "Murmuration", "TaskEndEvent should not be called for Murmuration"
         assert SYSTEM_SIMULATED != "Hawk", "TaskEndEvent should not be called for Hawk"
 
+        global per_job_task_info
+
         if (self.job_type_for_scheduling != BIG and self.SCHEDULE_BIG_CENTRALIZED):
             self.status_keeper.update_workers_queue([self.worker.id], False, self.estimated_task_duration, self.job_id, current_time)
 
-        del Job.per_job_task_info[self.job_id][self.this_task_id]
+        del per_job_task_info[self.job_id][self.this_task_id]
 
         self.worker.tstamp_start_crt_big_task =- 1
         return self.worker.free_slot(current_time)
@@ -698,12 +699,12 @@ class TaskEndEventForMachines():
     def run(self, current_time):
         if SYSTEM_SIMULATED == "Hawk" and self.SCHEDULE_BIG_CENTRALIZED:
             raise AssertionError("Sparrow trying to schedule in a centralized manner?")
-
+        global per_job_task_info
         if self.SCHEDULE_BIG_CENTRALIZED == True:
             self.status_keeper.update_machine_queue([self.worker_index], False, self.task_duration, self.job_id, current_time, self.this_task_id, self.num_cores, 0)
 
         if self.delete_task_entry:
-            del Job.per_job_task_info[self.job_id][self.this_task_id]
+            del per_job_task_info[self.job_id][self.this_task_id]
 
         worker = self.simulation.workers[self.worker_index]
         worker.busy_time += self.task_duration
@@ -1175,8 +1176,9 @@ class Worker(object):
 
     #Worker class
     def get_remaining_exec_time_for_job_alt(self, job_id, current_time):
+        global per_job_task_info
         remaining_exec_time = 0
-        job_info_hash       = Job.per_job_task_info[job_id]
+        job_info_hash       = per_job_task_info[job_id]
         for task in job_info_hash:
             val = job_info_hash[task]
             if( val == -1 ):  #task not started yet
@@ -1828,6 +1830,7 @@ class Simulation(object):
 
     #Simulation class
     def get_task(self, job_id, worker, current_time, probe_arrival_time):
+        global per_job_task_info
         job = self.jobs[job_id]
         #account for the fact that this is called when the probe is launched but it needs an RTT to talk to the scheduler
         response_time = 2 * NETWORK_DELAY
@@ -1836,7 +1839,7 @@ class Simulation(object):
         scheduler_algorithm_time = probe_arrival_time - job.start_time
 
         this_task_id=job.completed_tasks_count
-        Job.per_job_task_info[job_id][this_task_id] = current_time
+        per_job_task_info[job_id][this_task_id] = current_time
         events = []
         task_duration = job.unscheduled_tasks.pop()
         worker.busy_time += task_duration
@@ -1858,12 +1861,13 @@ class Simulation(object):
 
     #Simulation class
     def get_machine_task(self, machine, core_indices, job_id, task_index, task_cpu_request, task_duration, estimated_task_duration, current_time, probe_arrival_time):
+        global per_job_task_info
         job = self.jobs[job_id]
 
         task_wait_time = current_time - probe_arrival_time
         scheduler_algorithm_time = probe_arrival_time - job.start_time
 
-        Job.per_job_task_info[job_id][task_index] = current_time
+        per_job_task_info[job_id][task_index] = current_time
         events = []
         if job.actual_task_duration[task_index] != task_duration:
             raise AssertionError('The task index does not match the task duration')
@@ -1967,6 +1971,8 @@ BIG = 1
 SMALL = 0
 
 job_start_tstamps = {}
+job_count = 1
+per_job_task_info = {}
 
 random.seed(123456798)
 if(len(sys.argv) != 24):
