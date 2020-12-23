@@ -7,7 +7,6 @@
 
 import sys
 import time
-import logging
 import math
 import random
 import Queue
@@ -1855,9 +1854,6 @@ class Simulation(object):
         if SRPT_ENABLED and SYSTEM_SIMULATED == "Eagle":
                 events.append((current_time + 2*NETWORK_DELAY, UpdateRemainingTimeEvent(job)))
 
-        if len(job.unscheduled_tasks) == 0:
-            logging.info("Finished scheduling tasks for job %s" % job.id)
-
         return True, events
 
     #Simulation class
@@ -1894,10 +1890,6 @@ class Simulation(object):
             count += 1
             is_last_core_freed = (count == task_cpu_request)
             events.append((task_completion_time, TaskEndEventForMachines(self, core_index, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, task_duration, estimated_task_duration, task_index, task_cpu_request, is_last_core_freed)))
-
-
-        if len(job.unscheduled_tasks) == 0:
-            logging.info("Finished scheduling tasks for job %s" % job.id)
 
         return True, events
 
