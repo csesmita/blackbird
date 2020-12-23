@@ -52,8 +52,8 @@ class Job(object):
         self.unscheduled_tasks = collections.deque()
         self.actual_task_duration = collections.deque()
         self.cpu_reqs_by_tasks = collections.deque()
-        self.cpu_avg_per_task = collections.deque()
-        self.cpu_max_per_task = collections.deque()
+        #self.cpu_avg_per_task = collections.deque()
+        #self.cpu_max_per_task = collections.deque()
 
         self.off_mean_bottom = off_mean_bottom
         self.off_mean_top = off_mean_top
