@@ -1899,6 +1899,7 @@ class Simulation(object):
             del job.unscheduled_tasks
             del job.actual_task_duration
             del job.cpu_reqs_by_tasks
+            del self.jobs[job.id]
 
         return True, events
 
