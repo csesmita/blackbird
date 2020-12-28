@@ -1512,7 +1512,7 @@ class Simulation(object):
         machines = self.machines
         threads_start_time = time.time()
         threads_collection_start_time = time.time()
-        chunk_size = len(hash_machines_considered) / cpu_count()
+        chunk_size = max(len(hash_machines_considered) / cpu_count(), 1)
         if __name__ == '__main__':
             pool = Pool()
             args = [(keeper, machine_id, cpu_reqs_by_tasks, current_time, task_actual_durations) for machine_id in hash_machines_considered]
@@ -1894,6 +1894,11 @@ class Simulation(object):
             count += 1
             is_last_core_freed = (count == task_cpu_request)
             events.append((task_completion_time, TaskEndEventForMachines(self, core_index, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, task_duration, estimated_task_duration, task_index, task_cpu_request, is_last_core_freed)))
+
+        if is_job_complete:
+            del job.unscheduled_tasks
+            del job.actual_task_duration
+            del job.cpu_reqs_by_tasks
 
         return True, events
 
