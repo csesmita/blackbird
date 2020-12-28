@@ -1955,6 +1955,10 @@ class Simulation(object):
             for new_event in new_events:
                 self.event_queue.put(new_event)
 
+        #Free up all memory
+        del self.machines[:]
+        del self.scheduler_indices[:]
+        del self.workers[:]
         print "Simulation ending, no more events. Jobs completed", self.jobs_completed
         self.jobs_file.close()
 
@@ -2029,6 +2033,8 @@ print "Threads collection time ", threads_collection_time, "loop collection time
 print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine ", POLICY," hole fitting policy is ", utilization
 
 finished_file.close()
+job_start_tstamps.clear()
+per_job_task_info.clear()
 
 # Generate CDF data
 os.system("python process.py finished_file "+ SYSTEM_SIMULATED + " " + "long" + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES))
