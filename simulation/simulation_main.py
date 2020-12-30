@@ -328,13 +328,6 @@ class ProbeEventForWorkers(Event):
 # estimated start time of each task. The queue also includes currently
 # executing task at the worker.
 class ClusterStatusKeeper(object):
-    INDEX_OF_CORES_CHOSEN = 0
-    INDEX_OF_JOB_ID = 1
-    INDEX_OF_TASK_ID = 2
-    INDEX_OF_NUM_CORES = 3
-    INDEX_OF_TASK_DURATION = 4
-    INDEX_OF_ARRIVAL_TIME = 5
-    INDEX_OF_BEST_FIT_TIME = 6
     #In Murmuration, worker is the absolute core id, unique to every core in every machine of the DC.
     def __init__(self, num_workers):
         # worker_queues is a key value pair of worker indices and queued tasks.
@@ -468,7 +461,7 @@ class ClusterStatusKeeper(object):
         task_index = 0
         estimated_time = 0
         while task_index < len(self.worker_queues[worker_index]):
-            estimated_time += self.worker_queues[worker_index][task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION]
+            estimated_time += self.worker_queues[worker_index][task_index][4]
             task_index += 1
         return estimated_time
 
@@ -494,7 +487,7 @@ class ClusterStatusKeeper(object):
                 original_task_queue_length = len(tasks)
                 task_index = 0
                 while task_index < original_task_queue_length:
-                    if tasks[task_index][ClusterStatusKeeper.INDEX_OF_TASK_DURATION] == duration and tasks[task_index][ClusterStatusKeeper.INDEX_OF_JOB_ID] == job_id:
+                    if tasks[task_index][4] == duration and tasks[task_index][1] == job_id:
                         # Delete this task entry and finish
                         #print "Popping task entry", duration, job_id, " from worker_queue at worker", worker
                         tasks.pop(task_index)
@@ -519,10 +512,10 @@ class ClusterStatusKeeper(object):
     # TODO/Note - This function assumes no update is required after task is completed.
     # This is because hole fitting is based on actual task durations.
     def update_machine_queue(self, probe_params):
-        worker_indices = probe_params[ClusterStatusKeeper.INDEX_OF_CORES_CHOSEN]
-        arrival_time = probe_params[ClusterStatusKeeper.INDEX_OF_ARRIVAL_TIME]
-        best_fit_time = probe_params[ClusterStatusKeeper.INDEX_OF_BEST_FIT_TIME]
-        best_fit_end = best_fit_time + int(math.ceil(probe_params[ClusterStatusKeeper.INDEX_OF_TASK_DURATION]))
+        worker_indices = probe_params[0]
+        arrival_time = probe_params[5]
+        best_fit_time = probe_params[6]
+        best_fit_end = best_fit_time + int(math.ceil(probe_params[4]))
         # Subtract this busy time from core free times.
         self.update_worker_queues_free_time(worker_indices, best_fit_time, best_fit_end, arrival_time)
 
@@ -1860,7 +1853,10 @@ class Simulation(object):
         if is_job_complete:
             self.jobs_completed += 1
             # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time + Machine queue wait time + Task processing time
-            print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job_id, " scheduler_algorithm_time ", scheduler_algorithm_time, " task_wait_time ", task_wait_time, " task_processing_time ", task_duration
+            try:
+                print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job_id, " scheduler_algorithm_time ", scheduler_algorithm_time, " task_wait_time ", task_wait_time, " task_processing_time ", task_duration
+            except IOError, e:
+                print "Failed writing to output file due to ", e
 
         count = 0
         for core_index in core_indices:
