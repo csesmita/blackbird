@@ -197,13 +197,13 @@ class JobArrival(Event, file):
             if SYSTEM_SIMULATED == "Hawk" or SYSTEM_SIMULATED == "Eagle":
                 possible_worker_indices = self.simulation.small_partition_workers
             if SYSTEM_SIMULATED == "IdealEagle":
-                possible_worker_indices = self.simulation.get_list_non_long_job_workers_from_btmap(self.simulation.cluster_status_keeper.get_btmap())
+                possible_worker_indices = self.simulation.get_list_non_long_job_workers_from_btmap(keeper.get_btmap())
 
             worker_indices = self.simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, possible_worker_indices,MIN_NR_PROBES)
         else:
             # Long job schedulers
             #print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
-            btmap = self.simulation.cluster_status_keeper.get_btmap()
+            btmap = keeper.get_btmap()
 
             if (SYSTEM_SIMULATED == "DLWL"):
                 if self.job.job_type_for_comparison == SMALL:
@@ -212,17 +212,17 @@ class JobArrival(Event, file):
                     possible_workers = self.simulation.big_partition_workers_hash
                 estimated_task_durations = [self.job.estimated_task_duration for i in range(len(self.job.unscheduled_tasks))]
                 worker_indices = self.simulation.find_workers_dlwl(estimated_task_durations, self.simulation.shared_cluster_status, current_time, self.simulation, possible_workers)
-                self.simulation.cluster_status_keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration, self.job.id, current_time)
+                keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration, self.job.id, current_time)
             elif (self.simulation.SCHEDULE_BIG_CENTRALIZED):
                 if SYSTEM_SIMULATED == "CLWL" and self.job.job_type_for_comparison == SMALL:
                     possible_workers = self.simulation.small_partition_workers_hash
                     worker_indices = self.simulation.find_workers_long_job_prio(self.job.num_tasks, self.job.estimated_task_duration, current_time, self.simulation, possible_workers)
-                    self.simulation.cluster_status_keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration, self.job.id, current_time)
+                    keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration, self.job.id, current_time)
                 else:
                     # Eagle
                     possible_workers = self.simulation.big_partition_workers_hash
                     worker_indices = self.simulation.find_workers_long_job_prio(self.job.num_tasks, self.job.estimated_task_duration, current_time, self.simulation, possible_workers)
-                    self.simulation.cluster_status_keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration, self.job.id, current_time)
+                    keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration, self.job.id, current_time)
 
             else:
                 # Long job - Sparrow
@@ -284,9 +284,9 @@ class WorkerHeartbeatEvent(Event):
         new_events = []
         # shared_cluster_status is only used in DLWL
         if(HEARTBEAT_DELAY == 0):
-            self.simulation.shared_cluster_status = self.simulation.cluster_status_keeper.get_queue_status()
+            self.simulation.shared_cluster_status = keeper.get_queue_status()
         else:
-            self.simulation.shared_cluster_status = copy.deepcopy(self.simulation.cluster_status_keeper.get_queue_status()) 
+            self.simulation.shared_cluster_status = copy.deepcopy(keeper.get_queue_status())
 
         if(HEARTBEAT_DELAY != 0):
             if(self.simulation.jobs_completed != self.simulation.jobs_scheduled or self.simulation.scheduled_last_job == False):
@@ -352,66 +352,54 @@ class ClusterStatusKeeper(object):
     # Returns - ([est_task1, est_task2, ...],[[list of cores],[list of core], [],...])
     # Might return smaller values for smaller cpu req, even if those requests come in later.
     # Also, converts holes to ints except the last entry in end which is float('inf')
-    def get_machine_est_wait(self, machine_id, cpu_reqs, arrival_time, task_durations):
-        if len(cpu_reqs) != len(task_durations):
-            raise AssertionError('Error in parameters to get_machine_est_wait - mismatch in lengths of cpu requests and task duration arrays')
-        cores = simulation.machines[machine_id].cores
+    def get_machine_est_wait(self, cores, cpu_req, arrival_time, task_duration):
+        num_cores = len(cores)
+        if num_cores < cpu_req:
+            return (float('inf'), [])
+
         est_time_for_tasks = []
         cores_list_for_tasks = []
-        num_cores = len(cores)
-
         # Generate all possible holes to fit each task (D=task duration, N = num cpus needed)
         arrival_time = int(math.ceil(arrival_time))
-        for index in xrange(len(cpu_reqs)):
-            cpu_req = cpu_reqs[index]
-            #Fit into smallest integral duration hole
-            task_duration = int(math.ceil(task_durations[index]))
-            # Number of cores requested has to be atleast equal to the number of cores on the machine
-            # Filter out machines that have less than requested number of cores
-            if num_cores < cpu_req:
-                est_time_for_tasks.append(float('inf'))
-                cores_list_for_tasks.append([])
-                continue
-            all_slots_list = BitMap()
-            all_slots_list_add = all_slots_list.add
-            all_slots_list_cores = collections.defaultdict(BitMap)
-            all_slots_fragmentation = collections.defaultdict()
-            all_slots_fragmentation = dict()
-            inf_hole_start = {}
-            for core in cores:
-                core_id = core.id
-                time_start = self.worker_queues_free_time_start[core_id]
-                time_end = self.worker_queues_free_time_end[core_id]
-                if len(time_end) != len(time_start):
-                    raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of start and end hole arrays')
-                for hole in xrange(len(time_end)):
-                    if time_start[hole] >= time_end[hole]:
-                        print "Error in get_machine_est_wait - start of hole is equal or larger than end of hole"
-                        print "Core index", core_id, "hole id ", hole, "start is ", time_start[hole], "end is ", time_end[hole]
-                        raise AssertionError('Error in get_machine_est_wait - start of hole is equal or larger than end of hole')
-                    # Skip holes before arrival time
-                    if time_end[hole] < arrival_time:
-                        continue
-                    start = time_start[hole] if arrival_time <= time_start[hole] else arrival_time
-                    if time_end[hole] != float('inf'):
-                        # Find all possible holes at every granularity, each lasting task_duration time.
-                        time_granularity = 1
-                        end = time_end[hole] - task_duration + 1
-                        arr = range(start, end, time_granularity)
-                        for start_chunk in arr:
-                            #print "[t=",arrival_time,"] For core ", core_id," fitting task of duration", task_duration,"into hole = ", time_start[hole], time_end[hole], "starting at", start_chunk
-                            all_slots_list_add(start_chunk)
-                            all_slots_list_cores[start_chunk].add(core_id)
-                            if start_chunk not in all_slots_fragmentation.keys():
-                                all_slots_fragmentation[start_chunk] = {}
-                            all_slots_fragmentation[start_chunk][core_id] = max(start_chunk - time_start[hole],time_end[hole] - start_chunk - task_duration)
-                    else:
-                        all_slots_list_add(start)
-                        all_slots_list_cores[start].add(core_id)
-                        if start not in all_slots_fragmentation.keys():
-                            all_slots_fragmentation[start] = {}
-                        all_slots_fragmentation[start][core_id] = start - time_start[hole]
-                        inf_hole_start[core_id] = start
+        #Fit into smallest integral duration hole
+        task_duration = int(math.ceil(task_duration))
+        # Number of cores requested has to be atleast equal to the number of cores on the machine
+        # Filter out machines that have less than requested number of cores
+        all_slots_list = BitMap()
+        all_slots_list_add = all_slots_list.add
+        all_slots_list_cores = collections.defaultdict(BitMap)
+        all_slots_fragmentation = collections.defaultdict(collections.defaultdict)
+        inf_hole_start = {}
+        for core in cores:
+            core_id = core.id
+            time_start = self.worker_queues_free_time_start[core_id]
+            time_end = self.worker_queues_free_time_end[core_id]
+            if len(time_end) != len(time_start):
+                raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of start and end hole arrays')
+            for hole in xrange(len(time_end)):
+                if time_start[hole] >= time_end[hole]:
+                    print "Error in get_machine_est_wait - start of hole is equal or larger than end of hole"
+                    print "Core index", core_id, "hole id ", hole, "start is ", time_start[hole], "end is ", time_end[hole]
+                    raise AssertionError('Error in get_machine_est_wait - start of hole is equal or larger than end of hole')
+                # Skip holes before arrival time
+                if time_end[hole] < arrival_time:
+                    continue
+                start = time_start[hole] if arrival_time <= time_start[hole] else arrival_time
+                if time_end[hole] != float('inf'):
+                    # Find all possible holes at every granularity, each lasting task_duration time.
+                    time_granularity = 1
+                    end = time_end[hole] - task_duration + 1
+                    arr = range(start, end, time_granularity)
+                    for start_chunk in arr:
+                        #print "[t=",arrival_time,"] For core ", core_id," fitting task of duration", task_duration,"into hole = ", time_start[hole], time_end[hole], "starting at", start_chunk
+                        all_slots_list_add(start_chunk)
+                        all_slots_list_cores[start_chunk].add(core_id)
+                        all_slots_fragmentation[start_chunk][core_id] = max(start_chunk - time_start[hole],time_end[hole] - start_chunk - task_duration)
+                else:
+                    all_slots_list_add(start)
+                    all_slots_list_cores[start].add(core_id)
+                    all_slots_fragmentation[start][core_id] = start - time_start[hole]
+                    inf_hole_start[core_id] = start
 
             for core, inf_start in inf_hole_start.items():
                 for start in all_slots_list_cores.keys():
@@ -423,9 +411,7 @@ class ClusterStatusKeeper(object):
             for start_time in all_slots_list:
                 cores_available = len(all_slots_list_cores[start_time])
                 if cores_available == cpu_req:
-                    cores_list_for_tasks.append(list(all_slots_list_cores[start_time]))
-                    est_time_for_tasks.append(start_time)
-                    break
+                    return (start_time, all_slots_list_cores[start_time])
                 if cores_available > cpu_req:
                     #Randomly sample the required number of cores.
                     if POLICY == "RANDOM":
@@ -444,16 +430,7 @@ class ClusterStatusKeeper(object):
                     #print "Earliest start time for task", index," (duration - ", task_duration,") needing", cpu_req,"cores is ", start_time, "with cores", cores_list
                     # cpu_req is available when the fastest cpu_req number of cores is
                     # available for use at or after arrival_time.
-                    cores_list_for_tasks.append(cores_list)
-                    est_time_for_tasks.append(start_time)
-                    break
-
-        if len(est_time_for_tasks) != len(cpu_reqs):
-            raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of estimated time for tasks and cpus requested')
-        if len(cores_list_for_tasks) != len(cpu_reqs):
-            raise AssertionError('Error in get_machine_est_wait - mismatch in lengths of cores list for tasks and cpus requested')
-        est_time_for_tasks.append(machine_id)
-        return (est_time_for_tasks, cores_list_for_tasks, machine_id)
+                    return (start_time, cores_list)
 
 
     # ClusterStatusKeeper class
@@ -655,11 +632,10 @@ class TaskEndEvent():
 
 
 class TaskEndEventForMachines():
-    def __init__(self, simulation, worker_index, SCHEDULE_BIG_CENTRALIZED, status_keeper, job_id, task_duration, this_task_id, num_cores, delete_task_entry):
+    def __init__(self, simulation, worker_index, SCHEDULE_BIG_CENTRALIZED, job_id, task_duration, this_task_id, num_cores, delete_task_entry):
         self.simulation = simulation
         self.worker_index = worker_index
         self.SCHEDULE_BIG_CENTRALIZED = SCHEDULE_BIG_CENTRALIZED
-        self.status_keeper = status_keeper
         self.job_id = job_id
         self.task_duration = task_duration
         self.this_task_id = this_task_id
@@ -1343,7 +1319,6 @@ class Simulation(object):
         self.scheduled_last_job = False
 
         # Only for Murmuration will CORES_PER_MACHINE be >= 1. For the rest, it is = 1.
-        self.cluster_status_keeper = keeper
         self.stealing_allowed = stealing_allowed
         self.SCHEDULE_BIG_CENTRALIZED = SCHEDULE_BIG_CENTRALIZED
         self.WORKLOAD_FILE = WORKLOAD_FILE
@@ -1403,7 +1378,7 @@ class Simulation(object):
         prio_queue = Queue.PriorityQueue()
         empty_nodes = []  #performance optimization
         for index in hash_workers_considered:
-            qlen          = self.cluster_status_keeper.get_workers_queue_status(index)
+            qlen          = keeper.get_workers_queue_status(index)
 
             worker_obj    = simulation.workers[index]
             worker_id     = index
@@ -1467,77 +1442,34 @@ class Simulation(object):
             raise AssertionError('Number of tasks provided not equal to length of cpu_reqs_by_tasks list')
         if hash_machines_considered == []:
             return []
+        num_machines = len(hash_machines_considered)
         global threads_total_time, placement_total_time, threads_collection_time, loop_collection_time
-        cores_lists_for_reqs_to_machine_matrix = {}
-        est_time_list = []
+        est_time_machine_array = numpy.zeros(shape=(num_machines))
+        cores_lists_for_reqs_to_machine_matrix = collections.defaultdict()
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
         best_fit_for_tasks = []
         current_time += NETWORK_DELAY
-        get_machine_time = self.cluster_status_keeper.get_machine_est_wait
+        get_machine_time = keeper.get_machine_est_wait
         machines = self.machines
-        threads_start_time = time.time()
-        threads_collection_start_time = time.time()
-        chunk_size = max(len(hash_machines_considered) / cpu_count(), 1)
-        if __name__ == '__main__':
-            pool = Pool()
-            args = [(keeper, machine_id, cpu_reqs_by_tasks, current_time, task_actual_durations) for machine_id in hash_machines_considered]
-            loop_collection_start_time = time.time()
-            vector = list(pool.imap(unwrap_get_machine_est_wait, args, chunksize = chunk_size))
-            loop_collection_time += time.time() - loop_collection_start_time
-            pool.close()
-            pool.join()
-            est_and_cores_across_machines = zip(*vector)
-            est_time_list = list(est_and_cores_across_machines[0])
-            threads_collection_time += time.time() - threads_collection_start_time
-
-            for index in range(len(vector)):
-                machine_id = vector[index][2]
-                if machine_id not in cores_lists_for_reqs_to_machine_matrix.keys():
-                    cores_lists_for_reqs_to_machine_matrix[machine_id] = {}
-                for task_index in range(num_tasks):
-                    cores_lists_for_reqs_to_machine_matrix[machine_id][task_index] = vector[index][1][task_index]
-        threads_total_time += time.time() - threads_start_time
-
-        # Start collapsing the matrix for best fit
-        # est_time_machine_array = [[est_time..., m1], [est_time, ...., m2], ... ]
-        est_time_machine_array = numpy.array(est_time_list)
-        #Optimization for lazy update of cpu requests.
-        #Only update cores if they were selected earlier from this machine.
-        machines_chosen_till_now = BitMap()
         placement_start_time = time.time()
         for task_index in xrange(num_tasks):
-            # est_time_across_machines_for_this_task = [t1 t2 t3,... tM] for this task across machines
-            #print"------- Printing est_time_machine_array for job_id ", job_id, task_index, "--------"
-            est_time_across_machines_for_this_task = est_time_machine_array[:,task_index]
-            best_fit_time = numpy.sort(est_time_across_machines_for_this_task)[0]
-
-            #Fetch the machine with the best fit time for this task
-            row_index = numpy.where(est_time_across_machines_for_this_task == best_fit_time)[0][0]
-            chosen_machine = int(est_time_machine_array[row_index][num_tasks])
             cpu_req = cpu_reqs_by_tasks[task_index]
-            while chosen_machine in machines_chosen_till_now:
-                est_time, core_list, machine_id = get_machine_time(chosen_machine, [cpu_req], current_time, [task_actual_durations[task_index]])
-                est_time_machine_array[chosen_machine][task_index] = est_time[0]
-                cores_lists_for_reqs_to_machine_matrix[chosen_machine][task_index] = core_list[0]
-                est_time_across_machines_for_this_task = est_time_machine_array[:,task_index]
-                best_fit_time = numpy.sort(est_time_across_machines_for_this_task)[0]
-                if best_fit_time == float('inf'):
-                    raise AssertionError('Error - Got best fit time that is infinite!')
-                row_index = numpy.where(est_time_across_machines_for_this_task == best_fit_time)[0][0]
-                new_chosen_machine = int(est_time_machine_array[row_index][num_tasks])
-                if chosen_machine == new_chosen_machine:
-                    #Already updated this case
-                    break
-                chosen_machine = new_chosen_machine
-            cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine][task_index]
-            machines_chosen_till_now.add(chosen_machine)
+            for machine_id in hash_machines_considered:
+                est_time, core_list = get_machine_time(self.machines[machine_id].cores, cpu_req, current_time, task_actual_durations[task_index])
+                est_time_machine_array[machine_id] = est_time
+                cores_lists_for_reqs_to_machine_matrix[machine_id] = core_list
+            best_fit_time = int(numpy.sort(est_time_machine_array)[0])
+            if best_fit_time == float('inf'):
+                raise AssertionError('Error - Got best fit time that is infinite!')
+            chosen_machine = numpy.where(est_time_machine_array == best_fit_time)[0][0]
+            cores_at_chosen_machine = cores_lists_for_reqs_to_machine_matrix[chosen_machine]
             #print"Choosing machine", chosen_machine,":[",cores_at_chosen_machine,"] with best fit time ",best_fit_time,"for task #", task_index, " task_duration", task_actual_durations[task_index]," arrival time ", current_time, "requesting", cpu_req, "cores"
             best_fit_for_tasks.append([chosen_machine, cores_at_chosen_machine, best_fit_time])
 
             #Update est time at this machine and its cores
             probe_params = [cores_at_chosen_machine, job_id, task_index, cpu_req, task_actual_durations[task_index], current_time, best_fit_time]
             self.machines[chosen_machine].add_machine_probe(probe_params)
-            self.cluster_status_keeper.update_machine_queue(probe_params)
+            keeper.update_machine_queue(probe_params)
 
         placement_total_time += time.time() - placement_start_time
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
@@ -1552,7 +1484,7 @@ class Simulation(object):
         prio_queue = Queue.PriorityQueue()
 
         for index in hash_workers_considered:
-            qlen          = self.cluster_status_keeper.get_workers_queue_status(index)
+            qlen          = keeper.get_workers_queue_status(index)
             worker_obj    = simulation.workers[index]
 
             adjusted_waiting_time = qlen
@@ -1732,6 +1664,7 @@ class Simulation(object):
 
     # Simulation class
     # Contains optimization to sort workers just once
+    @profile
     def send_probes_murmuration(self, job, current_time, worker_indices, btmap):
         long_job = job.job_type_for_scheduling == BIG
         if not long_job:
@@ -1818,7 +1751,7 @@ class Simulation(object):
             # Task's total time = Scheduler queue time (=0) + Scheduler Algorithm time + Worker queue wait time + Task processing time
             print >> finished_file, task_completion_time," estimated_task_duration: ",job.estimated_task_duration, " by_def: ",job.job_type_for_comparison, " total_job_running_time: ",(job.end_time - job.start_time), " job_id", job_id, " scheduler_algorithm_time ", scheduler_algorithm_time, " task_wait_time ", task_wait_time, " task_processing_time ", task_duration
 
-        events.append((task_completion_time, TaskEndEvent(worker, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, job.job_type_for_scheduling, job.estimated_task_duration, this_task_id)))
+        events.append((task_completion_time, TaskEndEvent(worker, self.SCHEDULE_BIG_CENTRALIZED, keeper, job.id, job.job_type_for_scheduling, job.estimated_task_duration, this_task_id)))
         
         if SRPT_ENABLED and SYSTEM_SIMULATED == "Eagle":
                 events.append((current_time + 2*NETWORK_DELAY, UpdateRemainingTimeEvent(job)))
@@ -1862,7 +1795,7 @@ class Simulation(object):
         for core_index in core_indices:
             count += 1
             is_last_core_freed = (count == task_cpu_request)
-            events.append((task_completion_time, TaskEndEventForMachines(self, core_index, self.SCHEDULE_BIG_CENTRALIZED, self.cluster_status_keeper, job.id, task_duration, task_index, task_cpu_request, is_last_core_freed)))
+            events.append((task_completion_time, TaskEndEventForMachines(self, core_index, self.SCHEDULE_BIG_CENTRALIZED, job.id, task_duration, task_index, task_cpu_request, is_last_core_freed)))
 
         if is_job_complete:
             del job.unscheduled_tasks
@@ -1906,7 +1839,7 @@ class Simulation(object):
 
         if(SYSTEM_SIMULATED == "DLWL"):
             first_time = 0
-            self.shared_cluster_status = self.cluster_status_keeper.get_queue_status()
+            self.shared_cluster_status = keeper.get_queue_status()
             self.event_queue.put((0, WorkerHeartbeatEvent(self)))
 
         new_job = Job(self.task_distribution, line, estimate_distribution, self.off_mean_bottom, self.off_mean_top)
