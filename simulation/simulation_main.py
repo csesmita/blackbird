@@ -401,36 +401,36 @@ class ClusterStatusKeeper(object):
                     all_slots_fragmentation[start][core_id] = start - time_start[hole]
                     inf_hole_start[core_id] = start
 
-            for core, inf_start in inf_hole_start.items():
-                for start in all_slots_list_cores.keys():
-                    if start > inf_start:
-                        all_slots_list_cores[start].add(core)
-                        all_slots_fragmentation[start][core] = start - inf_start
+        for core, inf_start in inf_hole_start.items():
+            for start in all_slots_list_cores.keys():
+                if start > inf_start:
+                    all_slots_list_cores[start].add(core)
+                    all_slots_fragmentation[start][core] = start - inf_start
 
-            #Assuming all_slots_list is sorted.
-            for start_time in all_slots_list:
-                cores_available = len(all_slots_list_cores[start_time])
-                if cores_available == cpu_req:
-                    return (start_time, all_slots_list_cores[start_time])
-                if cores_available > cpu_req:
-                    #Randomly sample the required number of cores.
-                    if POLICY == "RANDOM":
-                        cores_list = random.sample(all_slots_list_cores[start_time], cpu_req)
+        #Assuming all_slots_list is sorted.
+        for start_time in all_slots_list:
+            cores_available = len(all_slots_list_cores[start_time])
+            if cores_available == cpu_req:
+                return (start_time, all_slots_list_cores[start_time])
+            if cores_available > cpu_req:
+                #Randomly sample the required number of cores.
+                if POLICY == "RANDOM":
+                    cores_list = random.sample(all_slots_list_cores[start_time], cpu_req)
+                else:
+                    cores_fragmented = all_slots_fragmentation[start_time]
+                    if POLICY == "MOST_LEFTOVER":
+                        #Select cores with largest available hole after allocation
+                        sorted_cores_fragmented = sorted(cores_fragmented.items(), key=operator.itemgetter(1), reverse=True)[0:cpu_req]
+                    elif POLICY == "LEAST_LEFTOVER":
+                        #Select cores with smallest available hole after allocation
+                        sorted_cores_fragmented = sorted(cores_fragmented.items(), key=operator.itemgetter(1), reverse=False)[0:cpu_req]
                     else:
-                        cores_fragmented = all_slots_fragmentation[start_time]
-                        if POLICY == "MOST_LEFTOVER":
-                            #Select cores with largest available hole after allocation
-                            sorted_cores_fragmented = sorted(cores_fragmented.items(), key=operator.itemgetter(1), reverse=True)[0:cpu_req]
-                        elif POLICY == "LEAST_LEFTOVER":
-                            #Select cores with smallest available hole after allocation
-                            sorted_cores_fragmented = sorted(cores_fragmented.items(), key=operator.itemgetter(1), reverse=False)[0:cpu_req]
-                        else:
-                            raise AssertionError('Check the name of the policy')
-                        cores_list = dict(sorted_cores_fragmented).keys()
-                    #print "Earliest start time for task", index," (duration - ", task_duration,") needing", cpu_req,"cores is ", start_time, "with cores", cores_list
-                    # cpu_req is available when the fastest cpu_req number of cores is
-                    # available for use at or after arrival_time.
-                    return (start_time, cores_list)
+                        raise AssertionError('Check the name of the policy')
+                    cores_list = BitMap(dict(sorted_cores_fragmented).keys())
+                #print "Earliest start time for task", index," (duration - ", task_duration,") needing", cpu_req,"cores is ", start_time, "with cores", cores_list
+                # cpu_req is available when the fastest cpu_req number of cores is
+                # available for use at or after arrival_time.
+                return (start_time, cores_list)
 
 
     # ClusterStatusKeeper class
@@ -1664,7 +1664,6 @@ class Simulation(object):
 
     # Simulation class
     # Contains optimization to sort workers just once
-    @profile
     def send_probes_murmuration(self, job, current_time, worker_indices, btmap):
         long_job = job.job_type_for_scheduling == BIG
         if not long_job:
