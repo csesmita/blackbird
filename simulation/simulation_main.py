@@ -1854,7 +1854,6 @@ NETWORK_DELAY = 0.0005
 BIG = 1
 SMALL = 0
 
-job_start_tstamps = {}
 job_count = 1
 
 random.seed(123456798)
@@ -1906,7 +1905,6 @@ print "Threads collection time ", threads_collection_time, "loop collection time
 print >> finished_file, "Average utilization in ", SYSTEM_SIMULATED, " with ", TOTAL_MACHINES,"machines and ",CORES_PER_MACHINE, " cores/machine ", POLICY," hole fitting policy is ", utilization
 
 finished_file.close()
-job_start_tstamps.clear()
 
 # Generate CDF data
 import os; os.system("python process.py finished_file "+ SYSTEM_SIMULATED + " " + "long" + " " + WORKLOAD_FILE + " " + str(TOTAL_MACHINES))
