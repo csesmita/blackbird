@@ -1261,7 +1261,6 @@ class Simulation(object):
 
         self.small_partition_workers_hash =  {}
         self.big_partition_workers_hash = {}
-        self.small_not_big_partition_workers_hash = {}
 
         self.small_partition_workers = self.worker_indices[:self.index_last_worker_of_small_partition+1]    # so not including the worker after :
         for node in self.small_partition_workers:
@@ -1272,12 +1271,9 @@ class Simulation(object):
             self.big_partition_workers_hash[node] = 1
 
         self.small_not_big_partition_workers = self.worker_indices[:self.index_first_worker_of_big_partition]  # so not including the worker after: 
-        for node in self.small_not_big_partition_workers:
-            self.small_not_big_partition_workers_hash[node] = 1
 
         #print "Size of self.small_partition_workers_hash:         ", len(self.small_partition_workers_hash)
         #print "Size of self.big_partition_workers_hash:           ", len(self.big_partition_workers_hash)
-        #print "Size of self.small_not_big_partition_workers_hash: ", len(self.small_not_big_partition_workers_hash)
 
 
         self.free_slots_small_partition = len(self.small_partition_workers)
