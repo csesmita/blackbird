@@ -1065,9 +1065,6 @@ class Worker(object):
 
         job_bydef_big = (self.simulation.jobs[job_id].job_type_for_comparison == BIG)
 
-        if(not job_bydef_big and self.queued_probes[0][2] == True and self.in_big and was_successful and task_status):
-            self.simulation.jobs_affected_by_holb[job_id]=1
-
 
         if(SBP_ENABLED==True and was_successful and task_status and not job_bydef_big):
             self.queued_probes[pos][4] = True
@@ -1303,7 +1300,6 @@ class Simulation(object):
 
         self.hash_jobid_to_node = {}
         self.btmap = None
-        self.jobs_affected_by_holb={}  
 
     #Simulation class
     def get_machine_id_from_worker_id(self, worker_id):
