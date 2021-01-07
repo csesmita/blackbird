@@ -191,9 +191,6 @@ class JobArrival(Event, file):
         elif not long_job:
             # Short job schedulers
             print current_time, ": Short Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
-            rnd_worker_in_big_partition = random.choice(list(self.simulation.big_partition_workers_hash.keys()))
-            self.simulation.hash_jobid_to_node[self.job.id]=rnd_worker_in_big_partition
-
             if SYSTEM_SIMULATED == "Hawk" or SYSTEM_SIMULATED == "Eagle":
                 possible_worker_indices = self.simulation.small_partition_workers
             if SYSTEM_SIMULATED == "IdealEagle":
@@ -1298,7 +1295,6 @@ class Simulation(object):
         self.btmap_tstamp = -1
         self.clusterstatus_from_btmap = None
 
-        self.hash_jobid_to_node = {}
         self.btmap = None
 
     #Simulation class
@@ -1597,20 +1593,6 @@ class Simulation(object):
             self.btmap_tstamp = -1
             self.btmap = None
             ROUNDS_SCHEDULING = 2 
-
-            #use local bitmap
-            #self.btmap        = self.workers[self.hash_jobid_to_node[job.id]].btmap
-            #self.btmap_tstamp = self.workers[self.hash_jobid_to_node[job.id]].btmap_tstamp
-            #ROUNDS_SCHEDULING = 2
-            
-            #if(self.btmap != None):
-             #   list_non_long_job_workers = self.get_list_non_long_job_workers_from_btmap(self.btmap)
-              #  worker_indices = self.find_workers_random(1, missing_probes, list_non_long_job_workers, 0)
-            #else:
-             #   stats.STATS_RND_FIRST_ROUND_NO_LOCAL_BITMAP +=1 
-
-             #small
-            #worker_indices = self.find_workers_random(PROBE_RATIO,job.num_tasks,self.big_partition_workers,MIN_NR_PROBES)
 
             for i in range(0,ROUNDS_SCHEDULING):
                 ok_nr, ok_nodes = self.try_round_of_probing(current_time,job,worker_indices,probe_events,i+1)  
