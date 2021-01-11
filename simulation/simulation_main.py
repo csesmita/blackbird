@@ -666,12 +666,9 @@ class Machine(object):
     def add_machine_probe(self, probe_params):
         self.queued_probes.put((probe_params[6], probe_params))
 
+    #Machine class
     def free_machine_core(self, core, current_time):
-        core_index = core.id
-        self.free_cores[core_index] = current_time
-        core.executing_big              = False
-        core.queued_big                 = core.queued_big -1
-        core.tstamp_start_crt_big_task  = current_time
+        self.free_cores[core.id] = current_time
         return self.try_process_next_probe_in_the_queue(current_time)
 
     #Machine class
@@ -835,33 +832,7 @@ class Machine(object):
 # In Murmuration, this class denotes a single core on a machine.
 class Worker(object):
     def __init__(self, num_slots, id, index_last_small, index_first_big):
-        
-        # List of times when slots were freed, for each free slot (used to track the time the worker spends idle).
-        # Only in the case of Murmuration, these are managed at the machine level.
-        if SYSTEM_SIMULATED != "Murmuration" and SYSTEM_SIMULATED != "Hawk":
-            self.free_slots = []
-            while len(self.free_slots) < num_slots:
-                self.free_slots.append(0)
-
-        self.queued_big = 0
-        self.queued_probes = []
-        # Some tasks have to be accounted for before they surface on the worker node
         self.id = id
-        self.executing_big = False
-
-        self.tstamp_start_crt_big_task = -1
-        self.estruntime_crt_task = -1
-
-        self.in_small           = False
-        self.in_big             = False
-        self.in_small_not_big   = False
-
-        if (id <= index_last_small):       self.in_small = True
-        if (id >= index_first_big):        self.in_big = True
-        if (id < index_first_big):         self.in_small_not_big = True
-
-        self.btmap = None
-        self.btmap_tstamp = -1
         # Parameter to measure how long this worker is busy in the total run.
         self.busy_time = 0.0
 
@@ -870,7 +841,31 @@ class Worker(object):
         if SYSTEM_SIMULATED == "Murmuration":
             if random.random() < RATIO_SCHEDULERS_TO_CORES:
                 self.scheduler = Scheduler()
+        # List of times when slots were freed, for each free slot (used to track the time the worker spends idle).
+        # Only in the case of Murmuration, these are managed at the machine level.
+        if SYSTEM_SIMULATED != "Murmuration" and SYSTEM_SIMULATED != "Hawk":
+            self.free_slots = []
+            while len(self.free_slots) < num_slots:
+                self.free_slots.append(0)
 
+            self.queued_big = 0
+            self.queued_probes = []
+            # Some tasks have to be accounted for before they surface on the worker node
+            self.executing_big = False
+
+            self.tstamp_start_crt_big_task = -1
+            self.estruntime_crt_task = -1
+
+            self.in_small           = False
+            self.in_big             = False
+            self.in_small_not_big   = False
+
+            if (id <= index_last_small):       self.in_small = True
+            if (id >= index_first_big):        self.in_big = True
+            if (id < index_first_big):         self.in_small_not_big = True
+
+            self.btmap = None
+            self.btmap_tstamp = -1
     #Worker class
     def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap, handle_stealing):
         if SYSTEM_SIMULATED == "Murmuration":
