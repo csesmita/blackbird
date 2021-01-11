@@ -81,7 +81,8 @@ class Job(object):
     def update_task_completion_details(self, completion_time):
         self.completed_tasks_count += 1
         self.end_time = max(completion_time, self.end_time)
-        assert self.completed_tasks_count <= self.num_tasks
+        if self.completed_tasks_count > self.num_tasks:
+            raise AssertionError('update_task_completion_details(): Completed tasks more than number of tasks!')
         return self.num_tasks == self.completed_tasks_count
 
 
@@ -104,7 +105,8 @@ class Job(object):
                self.cpu_reqs_by_tasks.appendleft(cores_needed)
                if cores_needed == CORES_PER_MACHINE:
                    cores_needed = 0
-        assert(len(self.unscheduled_tasks) == self.num_tasks)
+        if len(self.unscheduled_tasks) != self.num_tasks:
+            raise AssertionError('file_task_execution_time(): Number of unscheduled tasks is not the same as number of tasks')
 
     #Job class
     def update_remaining_time(self):
@@ -1353,14 +1355,12 @@ class Simulation(object):
     # for different tasks.
     # TODO: Other strategies - bulk allocation using well-fit, not best fit for tasks
     # Hole filling strategies, etc
-    def find_workers_long_job_prio_murmuration(self, job_id, num_tasks, current_time, hash_machines_considered, cpu_reqs_by_tasks, task_actual_durations):
+    def find_workers_long_job_prio_murmuration(self, job_id, num_tasks, current_time, cpu_reqs_by_tasks, task_actual_durations):
         if num_tasks != len(cpu_reqs_by_tasks):
             raise AssertionError('Number of tasks provided not equal to length of cpu_reqs_by_tasks list')
-        if hash_machines_considered == []:
-            return []
-        num_machines = len(hash_machines_considered)
-        global threads_total_time, placement_total_time, threads_collection_time, loop_collection_time
-        est_time_machine_array = numpy.zeros(shape=(num_machines))
+        hash_machines_considered = set(range(TOTAL_MACHINES))
+        global placement_total_time
+        est_time_machine_array = numpy.zeros(shape=(TOTAL_MACHINES))
         cores_lists_for_reqs_to_machine_matrix = collections.defaultdict()
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
         best_fit_for_tasks = []
@@ -1590,7 +1590,7 @@ class Simulation(object):
         # btmap indicates workers where long jobs are running
         # Find workers and update the cluster status for long jobs
         # Returns - [[m1,[cores]], [m2,[cores]],...]
-        machine_indices = self.find_workers_long_job_prio_murmuration(job.id, job.num_tasks, current_time, set(range(TOTAL_MACHINES)), job.cpu_reqs_by_tasks, job.actual_task_duration)
+        machine_indices = self.find_workers_long_job_prio_murmuration(job.id, job.num_tasks, current_time, job.cpu_reqs_by_tasks, job.actual_task_duration)
         if len(machine_indices) != job.num_tasks:
             raise AssertionError('Send probes received unequal number of machine indices and tasks')
         current_time += NETWORK_DELAY
@@ -1782,9 +1782,6 @@ if(len(sys.argv) != 24):
 
 utilization = 0
 placement_total_time = 0
-threads_total_time = 0
-loop_collection_time = 0
-threads_collection_time = 0
 
 WORKLOAD_FILE                   = sys.argv[1]
 stealing                        = (sys.argv[2] == "yes")
