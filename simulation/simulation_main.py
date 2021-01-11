@@ -15,10 +15,9 @@ import bitmap
 import copy
 import collections
 import numpy
+from gc import collect
 
 from pyroaring import BitMap
-from multiprocessing import Pool
-from multiprocessing import cpu_count
 
 class TaskDurationDistributions:
     CONSTANT, MEAN, FROM_FILE  = range(3)
@@ -26,13 +25,6 @@ class EstimationErrorDistribution:
     CONSTANT, RANDOM, MEAN  = range(3)
 
 RATIO_SCHEDULERS_TO_CORES = 0.1
-
-# An argument unwrapping function for invoking get_machine_est_wait in Pool.
-def unwrap_get_machine_est_wait(arg):
-    if len(arg) != 5:
-        # keeper, machine_id, cpu_req, arrival_time, task_duration
-        raise AssertionError('unwrap_get_machine_est_wait - Expected 5 arguments, received '+ str(len(arg)) + "arguments")
-    return arg[0].get_machine_est_wait(arg[1], arg[2], arg[3], arg[4])
 
 class Job(object):
     def __init__(self, task_distribution, line, estimate_distribution, off_mean_bottom, off_mean_top):
@@ -163,8 +155,7 @@ class Event(object):
 #####################################################################################################################
 
 class JobArrival(Event, file):
-    def __init__(self, simulation, task_distribution, job, jobs_file):
-        self.simulation = simulation
+    def __init__(self, task_distribution, job, jobs_file):
         self.task_distribution = task_distribution
         self.job = job
         self.jobs_file = jobs_file
@@ -185,18 +176,19 @@ class JobArrival(Event, file):
             # sending probe requests.
             # TODO - Follow the pattern of rest of the schedulers and 
             # have the worker selection logic here.
-            worker_indices.append(random.choice(self.simulation.scheduler_indices))
+            worker_indices.append(random.choice(simulation.scheduler_indices))
             if self.job.id % 100 == 0:
                 print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration, "simulation time", time.time() - t1
+                collect()
         elif not long_job:
             # Short job schedulers
             print current_time, ": Short Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
             if SYSTEM_SIMULATED == "Hawk" or SYSTEM_SIMULATED == "Eagle":
-                possible_worker_indices = self.simulation.small_partition_workers
+                possible_worker_indices = simulation.small_partition_workers
             if SYSTEM_SIMULATED == "IdealEagle":
-                possible_worker_indices = self.simulation.get_list_non_long_job_workers_from_btmap(keeper.get_btmap())
+                possible_worker_indices = simulation.get_list_non_long_job_workers_from_btmap(keeper.get_btmap())
 
-            worker_indices = self.simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, possible_worker_indices,MIN_NR_PROBES)
+            worker_indices = simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, possible_worker_indices,MIN_NR_PROBES)
         else:
             # Long job schedulers
             #print current_time, ":   Big Job arrived!!", self.job.id, " num tasks ", self.job.num_tasks, " estimated_duration ", self.job.estimated_task_duration
@@ -204,40 +196,41 @@ class JobArrival(Event, file):
 
             if (SYSTEM_SIMULATED == "DLWL"):
                 if self.job.job_type_for_comparison == SMALL:
-                    possible_workers = self.simulation.small_partition_workers_hash
+                    possible_workers = simulation.small_partition_workers_hash
                 else:
-                    possible_workers = self.simulation.big_partition_workers_hash
+                    possible_workers = simulation.big_partition_workers_hash
                 estimated_task_durations = [self.job.estimated_task_duration for i in range(len(self.job.unscheduled_tasks))]
-                worker_indices = self.simulation.find_workers_dlwl(estimated_task_durations, self.simulation.shared_cluster_status, current_time, self.simulation, possible_workers)
+                worker_indices = simulation.find_workers_dlwl(estimated_task_durations, simulation.shared_cluster_status, current_time, simulation, possible_workers)
                 keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration, self.job.id, current_time)
-            elif (self.simulation.SCHEDULE_BIG_CENTRALIZED):
+            elif (simulation.SCHEDULE_BIG_CENTRALIZED):
                 if SYSTEM_SIMULATED == "CLWL" and self.job.job_type_for_comparison == SMALL:
-                    possible_workers = self.simulation.small_partition_workers_hash
-                    worker_indices = self.simulation.find_workers_long_job_prio(self.job.num_tasks, self.job.estimated_task_duration, current_time, self.simulation, possible_workers)
+                    possible_workers = simulation.small_partition_workers_hash
+                    worker_indices = simulation.find_workers_long_job_prio(self.job.num_tasks, self.job.estimated_task_duration, current_time, simulation, possible_workers)
                     keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration, self.job.id, current_time)
                 else:
                     # Eagle
-                    possible_workers = self.simulation.big_partition_workers_hash
-                    worker_indices = self.simulation.find_workers_long_job_prio(self.job.num_tasks, self.job.estimated_task_duration, current_time, self.simulation, possible_workers)
+                    possible_workers = simulation.big_partition_workers_hash
+                    worker_indices = simulation.find_workers_long_job_prio(self.job.num_tasks, self.job.estimated_task_duration, current_time, simulation, possible_workers)
                     keeper.update_workers_queue(worker_indices, True, self.job.estimated_task_duration, self.job.id, current_time)
 
             else:
                 # Long job - Sparrow
                 if SYSTEM_SIMULATED == "Hawk":
-                    worker_indices = self.simulation.find_machines_random(PROBE_RATIO, self.job.num_tasks, set(range(TOTAL_MACHINES)), MIN_NR_PROBES, self.job.cpu_reqs_by_tasks)
+                    worker_indices = simulation.find_machines_random(PROBE_RATIO, self.job.num_tasks, set(range(TOTAL_MACHINES)), MIN_NR_PROBES, self.job.cpu_reqs_by_tasks)
                 else:
-                    worker_indices = self.simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, self.simulation.big_partition_workers,MIN_NR_PROBES)
+                    worker_indices = simulation.find_workers_random(PROBE_RATIO, self.job.num_tasks, simulation.big_partition_workers,MIN_NR_PROBES)
 
-        new_events = self.simulation.send_probes(self.job, current_time, worker_indices, btmap)
+        new_events = simulation.send_probes(self.job, current_time, worker_indices, btmap)
 
         # Creating a new Job Arrival event for the next job in the trace
         line = self.jobs_file.readline()
         if (line == ''):
-            self.simulation.scheduled_last_job = True
+            simulation.scheduled_last_job = True
             return new_events
         self.job = Job(self.task_distribution, line, self.job.estimate_distribution, self.job.off_mean_bottom, self.job.off_mean_top)
         new_events.append((self.job.start_time, self))
-        self.simulation.jobs_scheduled += 1
+        simulation.jobs_scheduled += 1
+
         return new_events
 
 
@@ -623,8 +616,7 @@ class TaskEndEvent():
 
 
 class TaskEndEventForMachines():
-    def __init__(self, simulation, worker_index, SCHEDULE_BIG_CENTRALIZED, job_id, task_duration, this_task_id, num_cores, delete_task_entry):
-        self.simulation = simulation
+    def __init__(self, worker_index, SCHEDULE_BIG_CENTRALIZED, job_id, task_duration, this_task_id, num_cores, delete_task_entry):
         self.worker_index = worker_index
         self.SCHEDULE_BIG_CENTRALIZED = SCHEDULE_BIG_CENTRALIZED
         self.job_id = job_id
@@ -637,7 +629,7 @@ class TaskEndEventForMachines():
         if SYSTEM_SIMULATED == "Hawk" and self.SCHEDULE_BIG_CENTRALIZED:
             raise AssertionError("Sparrow trying to schedule in a centralized manner?")
 
-        worker = self.simulation.workers[self.worker_index]
+        worker = simulation.workers[self.worker_index]
         worker.busy_time += self.task_duration
         worker.tstamp_start_crt_big_task =- 1
 
@@ -649,15 +641,14 @@ class TaskEndEventForMachines():
 # Support for multi-core machines in Murmuration
 # Core = Worker class
 class Machine(object):
-    def __init__(self, simulation, num_slots, id):
-        self.simulation = simulation
+    def __init__(self, num_slots, id):
         self.num_cores = num_slots
         self.id = id
 
         self.cores = []
         while len(self.cores) < self.num_cores:
             core_id = self.id * CORES_PER_MACHINE + len(self.cores)
-            core = Worker(simulation, 1, core_id, core_id, core_id)
+            core = Worker(1, core_id, core_id, core_id)
             self.cores.append(core)
 
         # Dictionary of core and time when it was freed (used to track the time the core spent idle).
@@ -712,7 +703,7 @@ class Machine(object):
             # Extract all information
             core_indices = task_info[0]
             job_id = task_info[1]
-            if len(self.simulation.jobs[job_id].unscheduled_tasks) <= 0:
+            if len(simulation.jobs[job_id].unscheduled_tasks) <= 0:
                 raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
             task_index = task_info[2]
             task_cpu_request = task_info[3]
@@ -760,7 +751,7 @@ class Machine(object):
             # Extract all information
             core_indices = candidate_task_info[0]
             job_id = candidate_task_info[1]
-            if len(self.simulation.jobs[job_id].unscheduled_tasks) <= 0:
+            if len(simulation.jobs[job_id].unscheduled_tasks) <= 0:
                 raise AssertionError('No redundant probes in Murmuration, yet tasks have finished?')
             task_index = candidate_task_info[2]
             task_cpu_request = candidate_task_info[3]
@@ -772,7 +763,7 @@ class Machine(object):
                 keeper.shift_holes(core_indices, candidate_best_fit_time, int(math.ceil(task_actual_duration)), current_time)
 
             # Finally, process the current task with all these parameters
-            task_status, new_events = self.simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, candidate_processing_time, probe_arrival_time)
+            task_status, new_events = simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, candidate_processing_time, probe_arrival_time)
             for new_event in new_events:
                 events.append((new_event[0], new_event[1]))
 
@@ -811,7 +802,7 @@ class Machine(object):
             probe_arrival_time = task_info[5]
 
             # Remove redundant probes for this task without accounting for them in response time.
-            if task_actual_duration not in self.simulation.jobs[job_id].unscheduled_tasks:
+            if task_actual_duration not in simulation.jobs[job_id].unscheduled_tasks:
                 continue
 
             if len(self.free_cores.keys()) < task_cpu_request:
@@ -830,7 +821,7 @@ class Machine(object):
             #    still enqueued till now despite cores available.
 
             # Finally, process the current task with all these parameters
-            task_status, new_events = self.simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, current_time, probe_arrival_time)
+            task_status, new_events = simulation.get_machine_task(self, core_indices, job_id, task_index, task_cpu_request, task_actual_duration, current_time, probe_arrival_time)
             for new_event in new_events:
                 events.append((new_event[0], new_event[1]))
             break
@@ -843,10 +834,8 @@ class Machine(object):
 # Legacy code for single slot workers - Eagle, IdealEagle, Hawk, DLWL and CLWL.
 # In Murmuration, this class denotes a single core on a machine.
 class Worker(object):
-    def __init__(self, simulation, num_slots, id, index_last_small, index_first_big):
+    def __init__(self, num_slots, id, index_last_small, index_first_big):
         
-        self.simulation = simulation
-
         # List of times when slots were freed, for each free slot (used to track the time the worker spends idle).
         # Only in the case of Murmuration, these are managed at the machine level.
         if SYSTEM_SIMULATED != "Murmuration" and SYSTEM_SIMULATED != "Hawk":
@@ -885,9 +874,9 @@ class Worker(object):
     #Worker class
     def add_probe(self, job_id, task_length, job_type_for_scheduling, current_time, btmap, handle_stealing):
         if SYSTEM_SIMULATED == "Murmuration":
-            assert False, "Murmuration should not invoke ProbeEventForWorkers or worker.add_probe()"
+            raise AssertionError("Murmuration should not invoke ProbeEventForWorkers or worker.add_probe()")
         if SYSTEM_SIMULATED == "Hawk":
-            assert False, "Hawk should not invoke ProbeEventForWorkers or worker.add_probe()"
+            raise AssertionError("Hawk should not invoke ProbeEventForWorkers or worker.add_probe()")
         long_job = job_type_for_scheduling == BIG
         self.queued_probes.append([job_id,task_length,(self.executing_big == True or self.queued_big > 0), 0, False,-1, current_time])
 
@@ -908,18 +897,18 @@ class Worker(object):
     # In Murmuration, free_slot will report the same to the machine class.
     def free_slot(self, current_time):
         if SYSTEM_SIMULATED == "Murmuration" or SYSTEM_SIMULATED == "Hawk":
-            machine_id = self.simulation.get_machine_id_from_worker_id(self.id)
-            machine = self.simulation.machines[machine_id]
+            machine_id = simulation.get_machine_id_from_worker_id(self.id)
+            machine = simulation.machines[machine_id]
             return machine.free_machine_core(self, current_time)
 
         self.free_slots.append(current_time)
-        self.simulation.increase_free_slots_for_load_tracking(self)
+        simulation.increase_free_slots_for_load_tracking(self)
         self.executing_big = False
 
         if len(self.queued_probes) > 0:
             return self.process_next_probe_in_the_queue(current_time)
         
-        if len(self.queued_probes) == 0 and self.simulation.stealing_allowed == True:
+        if len(self.queued_probes) == 0 and simulation.stealing_allowed == True:
             return self.ask_probes(current_time)
         
         return []
@@ -932,17 +921,17 @@ class Worker(object):
         from_worker = -1
 
         while(ctr_it < STEALING_ATTEMPTS and len(new_probes) == 0):
-            from_worker,new_probes = self.simulation.get_probes(current_time, self.id)
+            from_worker,new_probes = simulation.get_probes(current_time, self.id)
             ctr_it += 1
 
         if(from_worker!=-1 and len(new_probes)!= 0):
             print current_time, ": Worker ", self.id," Stealing: ", len(new_probes), " from: ",from_worker, " attempts: ",ctr_it
-            from_worker_obj=self.simulation.workers[from_worker]
+            from_worker_obj=simulation.workers[from_worker]
         else:
             print current_time, ": Worker ", self.id," failed to steal. attempts: ",ctr_it
 
         for job_id, task_length, behind_big, cum, sticky, handle_steal, probe_time in new_probes:
-            assert (self.simulation.jobs[job_id].job_type_for_comparison != BIG)
+            assert (simulation.jobs[job_id].job_type_for_comparison != BIG)
             new_events.extend(self.add_probe(job_id, task_length, SMALL, current_time, None,True))
 
         return new_events
@@ -958,12 +947,12 @@ class Worker(object):
         skipped_big = 0
 
         if not self.executing_big:
-            while (i < len(self.queued_probes) and self.simulation.jobs[self.queued_probes[i][0]].job_type_for_comparison != BIG): #self.queued_probes[i][1] <= CUTOFF_THIS_EXP):
+            while (i < len(self.queued_probes) and simulation.jobs[self.queued_probes[i][0]].job_type_for_comparison != BIG): #self.queued_probes[i][1] <= CUTOFF_THIS_EXP):
                 i += 1
 
         skipped_short = i
 
-        while (i < len(self.queued_probes) and self.simulation.jobs[self.queued_probes[i][0]].job_type_for_comparison == BIG): #self.queued_probes[i][1] > CUTOFF_THIS_EXP):
+        while (i < len(self.queued_probes) and simulation.jobs[self.queued_probes[i][0]].job_type_for_comparison == BIG): #self.queued_probes[i][1] > CUTOFF_THIS_EXP):
             i += 1
 
         skipped_big = i - skipped_short
@@ -972,7 +961,7 @@ class Worker(object):
 
         nr_short_chosen = 0
         if (i < len(self.queued_probes)):
-            while (len(self.queued_probes) > i and self.simulation.jobs[self.queued_probes[i][0]].job_type_for_scheduling != BIG and nr_short_chosen < STEALING_LIMIT):
+            while (len(self.queued_probes) > i and simulation.jobs[self.queued_probes[i][0]].job_type_for_scheduling != BIG and nr_short_chosen < STEALING_LIMIT):
                 nr_short_chosen += 1
                 probes_to_give.append(self.queued_probes.pop(i))
                 total_time_probes += probes_to_give[-1][1]
@@ -990,7 +979,7 @@ class Worker(object):
 
         #record the ids (in queued_probes) of the queued short tasks
         while (i < len(self.queued_probes)):
-            big_job = self.simulation.jobs[self.queued_probes[i][0]].job_type_for_scheduling == BIG
+            big_job = simulation.jobs[self.queued_probes[i][0]].job_type_for_scheduling == BIG
             if (not big_job): #self.queued_probes[i][1] <= CUTOFF_THIS_EXP):
                 all_positions_of_short_tasks.append(i)
             i += 1
@@ -1019,11 +1008,11 @@ class Worker(object):
     #Worker class
     def process_next_probe_in_the_queue(self, current_time):
         if SYSTEM_SIMULATED == "Murmuration":
-            assert False, "Murmuration shouldn't be invoking worker.process_next_probe_in_the_queue()"
+            raise AssertionError("Murmuration shouldn't be invoking worker.process_next_probe_in_the_queue()")
         if SYSTEM_SIMULATED == "Hawk":
-            assert False, "Hawk shouldn't be invoking worker.process_next_probe_in_the_queue()"
+            raise AssertionError("Hawk shouldn't be invoking worker.process_next_probe_in_the_queue()")
         self.free_slots.pop(0)
-        self.simulation.decrease_free_slots_for_load_tracking(self)
+        simulation.decrease_free_slots_for_load_tracking(self)
         
         if (SRPT_ENABLED):
             if (SYSTEM_SIMULATED == "Eagle" or SYSTEM_SIMULATED == "Hawk"):
@@ -1041,7 +1030,7 @@ class Worker(object):
         estimated_task_duration = self.queued_probes[pos][1]
         probe_arrival_time = self.queued_probes[pos][6]
 
-        self.executing_big = self.simulation.jobs[job_id].job_type_for_scheduling == BIG
+        self.executing_big = simulation.jobs[job_id].job_type_for_scheduling == BIG
         if self.executing_big:
             self.queued_big                 = self.queued_big -1
             self.tstamp_start_crt_big_task  = current_time
@@ -1053,14 +1042,14 @@ class Worker(object):
         task_status = True
         # This ensures only outstanding jobs are processed.
         # Redundant probes are removed later.
-        if len(self.simulation.jobs[job_id].unscheduled_tasks) == 0 :
+        if len(simulation.jobs[job_id].unscheduled_tasks) == 0 :
             get_task_response_time = current_time + 2 * NETWORK_DELAY
             was_successful = False
             events = [(get_task_response_time, NoopGetTaskResponseEvent(self))]
         else :
-            task_status, events = self.simulation.get_task(job_id, self, current_time, probe_arrival_time)
+            task_status, events = simulation.get_task(job_id, self, current_time, probe_arrival_time)
 
-        job_bydef_big = (self.simulation.jobs[job_id].job_type_for_comparison == BIG)
+        job_bydef_big = (simulation.jobs[job_id].job_type_for_comparison == BIG)
 
 
         if(SBP_ENABLED==True and was_successful and task_status and not job_bydef_big):
@@ -1087,9 +1076,9 @@ class Worker(object):
 
                     #Debug
                     if(SYSTEM_SIMULATED=="Eagle"):
-                        job_bydef_big = self.simulation.jobs[job_id].job_type_for_comparison == BIG
+                        job_bydef_big = simulation.jobs[job_id].job_type_for_comparison == BIG
                         assert(not job_bydef_big)
-                        task_duration = self.simulation.jobs[job_id].estimated_task_duration
+                        task_duration = simulation.jobs[job_id].estimated_task_duration
                         if (CAP_SRPT_SBP != float('inf')):
                             assert(new_acc_delay <= CAP_SRPT_SBP * task_duration), " Chosen position: %r, length %r , offending  %r" % (pos,len(self.queued_probes), new_acc_delay)
                         else:
@@ -1100,13 +1089,13 @@ class Worker(object):
 
     #Worker class
     def get_remaining_exec_time_for_job_dist(self, job_id, current_time):
-        job = self.simulation.jobs[job_id]
+        job = simulation.jobs[job_id]
         remaining_exec_time = job.remaining_exec_time
         return remaining_exec_time
 
     #Worker class
     def get_remaining_exec_time_for_job(self, job_id, current_time):
-        job = self.simulation.jobs[job_id]
+        job = simulation.jobs[job_id]
         if (len(job.unscheduled_tasks) == 0): #Improvement
             remaining_exec_time = -1
         else:
@@ -1133,8 +1122,8 @@ class Worker(object):
                 self.queued_probes.pop(position_it)
                 len_queue = len(self.queued_probes)
             else:
-                job_bydef_big = self.simulation.jobs[job_id].job_type_for_comparison == BIG
-                estimated_task_duration = self.simulation.jobs[job_id].estimated_task_duration
+                job_bydef_big = simulation.jobs[job_id].job_type_for_comparison == BIG
+                estimated_task_duration = simulation.jobs[job_id].estimated_task_duration
 
                 jump_ok = False
                 if(job_bydef_big and position_it == 0):
@@ -1180,13 +1169,13 @@ class Worker(object):
             remaining = self.get_remaining_exec_time_for_job(job_id, current_time)
             assert(remaining >= 0)
 
-            estimated_task_duration = self.simulation.jobs[job_id].estimated_task_duration
+            estimated_task_duration = simulation.jobs[job_id].estimated_task_duration
 
             if(remaining < min_remaining_exec_time):
                 # Check CAP jobs in front
                 if(estimated_task_duration < shortest_slack_in_front):        
                     position_in_queue = position_it
-                    estimated_delay = self.simulation.jobs[job_id].estimated_task_duration
+                    estimated_delay = simulation.jobs[job_id].estimated_task_duration
                     min_remaining_exec_time = remaining # Optimization
 
             # calculate shortest slack for next probes
@@ -1207,9 +1196,7 @@ class Worker(object):
 
 class Scheduler(object):
     def __init__(self):
-        self.total_jobs_counter = 0
-        self.long_tasks_jobs_duration = 0.0
-        self.total_tasks_jobs_duration = 0.0
+        pass
 
 #####################################################################################################################
 #####################################################################################################################
@@ -1234,12 +1221,12 @@ class Simulation(object):
         # Only for Murmuration, first simulate machines which will simulate worker cores, which will simulate schedulers.
         if SYSTEM_SIMULATED != "Murmuration" and SYSTEM_SIMULATED != "Hawk":
             while len(self.workers) < TOTAL_MACHINES:
-                worker = Worker(self, CORES_PER_MACHINE, len(self.workers),self.index_last_worker_of_small_partition,self.index_first_worker_of_big_partition)
+                worker = Worker(CORES_PER_MACHINE, len(self.workers),self.index_last_worker_of_small_partition,self.index_first_worker_of_big_partition)
                 self.workers.append(worker)
         else:
             # Murmuration and Hawk
             while len(self.machines) < TOTAL_MACHINES:
-                machine = Machine(self, CORES_PER_MACHINE, len(self.machines))
+                machine = Machine(CORES_PER_MACHINE, len(self.machines))
                 self.machines.append(machine)
                 workers = machine.cores
                 self.workers.extend(workers)
@@ -1434,7 +1421,7 @@ class Simulation(object):
             probe_params = [cores_at_chosen_machine, job_id, task_index, cpu_req, task_actual_durations[task_index], current_time, best_fit_time]
             self.machines[chosen_machine].add_machine_probe(probe_params)
             keeper.update_machine_queue(probe_params)
-
+        cores_lists_for_reqs_to_machine_matrix.clear()
         placement_total_time += time.time() - placement_start_time
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
         return best_fit_for_tasks
@@ -1740,7 +1727,7 @@ class Simulation(object):
         for core_index in core_indices:
             count += 1
             is_last_core_freed = (count == task_cpu_request)
-            events.append((task_completion_time, TaskEndEventForMachines(self, core_index, self.SCHEDULE_BIG_CENTRALIZED, job.id, task_duration, task_index, task_cpu_request, is_last_core_freed)))
+            events.append((task_completion_time, TaskEndEventForMachines(core_index, self.SCHEDULE_BIG_CENTRALIZED, job.id, task_duration, task_index, task_cpu_request, is_last_core_freed)))
 
         if is_job_complete:
             del job.unscheduled_tasks
@@ -1788,7 +1775,7 @@ class Simulation(object):
             self.event_queue.put((0, WorkerHeartbeatEvent(self)))
 
         new_job = Job(self.task_distribution, line, estimate_distribution, self.off_mean_bottom, self.off_mean_top)
-        self.event_queue.put((float(line.split()[0]), JobArrival(self, self.task_distribution, new_job, self.jobs_file)))
+        self.event_queue.put((float(line.split()[0]), JobArrival(self.task_distribution, new_job, self.jobs_file)))
         self.jobs_scheduled = 1
         #self.event_queue.put((float(line.split()[0]), PeriodicTimerEvent(self)))
 
