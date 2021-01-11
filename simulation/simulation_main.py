@@ -296,9 +296,9 @@ class ProbeEventForMachines(Event):
 class ProbeEventForWorkers(Event):
     def __init__(self, worker, job_id, task_length, job_type_for_scheduling, btmap):
         if SYSTEM_SIMULATED == "Murmuration":
-            assert False, "Murmuration should not invoke ProbeEventForWorkers or worker.add_probe()"
+            raise AssertionError("Murmuration should not invoke ProbeEventForWorkers or worker.add_probe()")
         if SYSTEM_SIMULATED == "Hawk":
-            assert False, "Hawk should not invoke ProbeEventForWorkers or worker.add_probe()"
+            raise AssertionError("Hawk should not invoke ProbeEventForWorkers or worker.add_probe()")
         self.worker = worker
         self.job_id = job_id
         self.task_length = task_length
@@ -460,28 +460,6 @@ class ClusterStatusKeeper(object):
                     raise AssertionError(" %r %r - offending value for task_duration: %r %r %i" % (task_index, original_task_queue_length, duration,job_id,worker))
                 if(len(tasks) == 0):
                     self.btmap.flip(worker)
-
-    def print_core_queue(self, core_index):
-        tasks = self.worker_queues[core_index]
-        print "Tasks at core", core_index," - "
-        for task in tasks:
-            print task
-
-    # ClusterStatusKeeper class
-    # Machine specific
-    # Similar to update_worker_queue() in queueing same task at multiple
-    # workers (cores). This is because this is a multi-core task request.
-    # The previous function is for redundancy in probe placements.
-    # TODO/Note - This function assumes no update is required after task is completed.
-    # This is because hole fitting is based on actual task durations.
-    def update_machine_queue(self, probe_params):
-        worker_indices = probe_params[0]
-        arrival_time = probe_params[5]
-        best_fit_time = probe_params[6]
-        best_fit_end = best_fit_time + int(math.ceil(probe_params[4]))
-        # Subtract this busy time from core free times.
-        self.update_worker_queues_free_time(worker_indices, best_fit_time, best_fit_end, arrival_time)
-
 
     #This function is needed in the first place to ensure best fit algorithm does not make a false placement
     #for a hole which is non existent when cores are actually freed. This is because of difference in precision
@@ -663,8 +641,8 @@ class Machine(object):
         self.queued_probes = Queue.PriorityQueue()
 
     #Machine class
-    def add_machine_probe(self, probe_params):
-        self.queued_probes.put((probe_params[6], probe_params))
+    def add_machine_probe(self, best_fit_time, probe_params):
+        self.queued_probes.put((best_fit_time, probe_params))
 
     #Machine class
     def free_machine_core(self, core, current_time):
@@ -1413,9 +1391,9 @@ class Simulation(object):
             best_fit_for_tasks.append([chosen_machine, cores_at_chosen_machine, best_fit_time])
 
             #Update est time at this machine and its cores
-            probe_params = [cores_at_chosen_machine, job_id, task_index, cpu_req, task_actual_durations[task_index], current_time, best_fit_time]
-            self.machines[chosen_machine].add_machine_probe(probe_params)
-            keeper.update_machine_queue(probe_params)
+            probe_params = [cores_at_chosen_machine, job_id, task_index, cpu_req, task_actual_durations[task_index], current_time]
+            self.machines[chosen_machine].add_machine_probe(best_fit_time, probe_params)
+            keeper.update_worker_queues_free_time(cores_at_chosen_machine, best_fit_time, best_fit_time + int(math.ceil(task_actual_durations[task_index])), current_time)
         cores_lists_for_reqs_to_machine_matrix.clear()
         placement_total_time += time.time() - placement_start_time
         # best_fit_for_tasks = [[ma, [cores]], [mb, [cores]], .... ]
